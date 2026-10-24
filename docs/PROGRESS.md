@@ -21,10 +21,10 @@
 | 监控项 | 当前状态 |
 |---|---|
 | **当前阶段** | **M0 骨架（进行中）** |
-| **完成进度** | M0 阶段：5 / 15 项 |
-| **进行中任务** | M0-11 (本地 Compose 编排) |
+| **完成进度** | M0 阶段：8 / 15 项 |
+| **进行中任务** | M0-07 (HTTP 服务骨架与探针) |
 | **阻塞事项** | 无 |
-| **下一步行动** | 启动 **M0-11 & M0-06**：本地 Compose 编排文件与基础设施连接装配（MySQL/Redis/MQ） |
+| **下一步行动** | 启动 **M0-07, M0-08, M0-09**：HTTP 服务骨架、探针中间件、API 与 Worker 双入口优雅停机 |
 
 ---
 
@@ -52,13 +52,13 @@
 | **M0-02** | 配置加载与启动校验 | M0-01 | 覆盖单元测试：必填项校验、环境覆盖、非法值拦截、禁止 `clientFoundRows` | `DONE` |
 | **M0-03** | 结构化日志组件（`log/slog`） | M0-01 | 支持 Text/JSON 格式切换；日志级别可配；零额外三方依赖 | `DONE` |
 | **M0-04** | 统一 API 响应信封与错误码 | M0-01 | 成功/失败 Envelope 格式一致；未识别错误兜底为 `internal` | `DONE` |
-| **M0-05** | 接入 `golang-migrate` 数据库迁移 | M0-06 | 本地数据库执行初始迁移；验证版本推进与 dirty 状态管理机制 | `TODO` |
-| **M0-06** | 基础设施连接装配（MySQL/Redis/MQ） | M0-02 | 依赖不可用时快速失败并给出可读原因；连接池配置生效 | `TODO` |
+| **M0-05** | 接入 `golang-migrate` 数据库迁移 | M0-06 | 本地数据库执行初始迁移；验证版本推进与 dirty 状态管理机制 | `DONE` |
+| **M0-06** | 基础设施连接装配（MySQL/Redis/MQ） | M0-02 | 依赖不可用时快速失败并给出可读原因；连接池配置生效 | `DONE` |
 | **M0-07** | HTTP 服务骨架与探针中间件 | M0-06 | 挂载 `RequestID` 与 `AccessLog` 中间件；暴露 `/healthz`、`/readyz` 与 Prometheus `/metrics` 端点；停用 Redis 时 readyz=503 而 healthz=200 | `TODO` |
 | **M0-08** | API 服务入口与优雅停机 | M0-07 | 监听 SIGTERM 信号，在途请求处理完毕后按序释放资源，无 Panic | `TODO` |
 | **M0-09** | Worker 异步服务入口 | M0-06 | 独立进程入口，能正常启动与优雅退出 | `TODO` |
 | **M0-10** | 配置文件模板与环境变量示例 | M0-02 | `configs/config.yaml` 与 `.env.example` 完整齐备 | `DONE` |
-| **M0-11** | 本地 Compose 编排文件 | — | 宿主机端口映射：MySQL 3307、Redis 6380、RabbitMQ 5673 | `TODO` |
+| **M0-11** | 本地 Compose 编排文件 | — | 宿主机端口映射：MySQL 3307、Redis 6380、RabbitMQ 5673 | `DONE` |
 | **M0-12** | Makefile 工程脚本 | M0-11 | 支持 `make up / down / migrate / run / test / vet` | `TODO` |
 | **M0-13** | GitHub Actions CI 工作流 | M0-12 | PR/Push 自动执行 `vet` + `test` + `build`；校验历史迁移脚本不变性 | `TODO` |
 | **M0-14** | 项目快速上手 README | — | 包含 10 分钟本地构建启动指引与架构简述 | `TODO` |
