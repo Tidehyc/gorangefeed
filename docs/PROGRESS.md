@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M0 骨架（未开始）** |
-| **完成进度** | M0 阶段：0 / 15 项 |
-| **进行中任务** | 无 |
+| **当前阶段** | **M0 骨架（进行中）** |
+| **完成进度** | M0 阶段：5 / 15 项 |
+| **进行中任务** | M0-11 (本地 Compose 编排) |
 | **阻塞事项** | 无 |
-| **下一步行动** | 启动 **M0-01**：工程目录结构初始化、`go.mod`（`github.com/Tidehyc/gorangefeed`）及 `.gitignore` 创建 |
+| **下一步行动** | 启动 **M0-11 & M0-06**：本地 Compose 编排文件与基础设施连接装配（MySQL/Redis/MQ） |
 
 ---
 
@@ -32,7 +32,7 @@
 
 | 里程碑 | 主题 | 关联需求 | 状态 | 核心完成标准 |
 |---|---|---|---|---|
-| **M0** | 工程骨架与基础设施装配 | NFR-MAINT-*, NFR-OBS-01 | `TODO` | `go vet` + `go test` 绿灯；`docker compose` 一键启动；`/readyz` 正确反映依赖状态，`/metrics` 输出标准指标 |
+| **M0** | 工程骨架与基础设施装配 | NFR-MAINT-*, NFR-OBS-01 | `DOING` | `go vet` + `go test` 绿灯；`docker compose` 一键启动；`/readyz` 正确反映依赖状态，`/metrics` 输出标准指标 |
 | **M1** | 账号、双 Token 与安全中间件 | FR-ACC-01~06, NFR-SEC-07 | `TODO` | 登录、刷新、登出及旧 Token 撤销全流程通过；软鉴权与频控限流测试通过 |
 | **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `TODO` | `e2e.sh` 跑通上传、发布与详情；视频路由支持 HTTP 206 Range 分段请求；`videos` 与 `video_stats` 数据一致 |
 | **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `TODO` | 200MB 文件断网 3 次重试续传成功；MySQL 位图权威状态保证无并发覆盖 |
@@ -48,16 +48,16 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M0-01** | 初始化目录结构与 Go Module | — | `go.mod` 模块名为 `github.com/Tidehyc/gorangefeed`；目录结构与设计方案一致（包含 `web/README.md` 占位） | `TODO` |
-| **M0-02** | 配置加载与启动校验 | M0-01 | 覆盖单元测试：必填项校验、环境覆盖、非法值拦截、禁止 `clientFoundRows` | `TODO` |
-| **M0-03** | 结构化日志组件（`log/slog`） | M0-01 | 支持 Text/JSON 格式切换；日志级别可配；零额外三方依赖 | `TODO` |
-| **M0-04** | 统一 API 响应信封与错误码 | M0-01 | 成功/失败 Envelope 格式一致；未识别错误兜底为 `internal` | `TODO` |
+| **M0-01** | 初始化目录结构与 Go Module | — | `go.mod` 模块名为 `github.com/Tidehyc/gorangefeed`；目录结构与设计方案一致（包含 `web/README.md` 占位） | `DONE` |
+| **M0-02** | 配置加载与启动校验 | M0-01 | 覆盖单元测试：必填项校验、环境覆盖、非法值拦截、禁止 `clientFoundRows` | `DONE` |
+| **M0-03** | 结构化日志组件（`log/slog`） | M0-01 | 支持 Text/JSON 格式切换；日志级别可配；零额外三方依赖 | `DONE` |
+| **M0-04** | 统一 API 响应信封与错误码 | M0-01 | 成功/失败 Envelope 格式一致；未识别错误兜底为 `internal` | `DONE` |
 | **M0-05** | 接入 `golang-migrate` 数据库迁移 | M0-06 | 本地数据库执行初始迁移；验证版本推进与 dirty 状态管理机制 | `TODO` |
 | **M0-06** | 基础设施连接装配（MySQL/Redis/MQ） | M0-02 | 依赖不可用时快速失败并给出可读原因；连接池配置生效 | `TODO` |
 | **M0-07** | HTTP 服务骨架与探针中间件 | M0-06 | 挂载 `RequestID` 与 `AccessLog` 中间件；暴露 `/healthz`、`/readyz` 与 Prometheus `/metrics` 端点；停用 Redis 时 readyz=503 而 healthz=200 | `TODO` |
 | **M0-08** | API 服务入口与优雅停机 | M0-07 | 监听 SIGTERM 信号，在途请求处理完毕后按序释放资源，无 Panic | `TODO` |
 | **M0-09** | Worker 异步服务入口 | M0-06 | 独立进程入口，能正常启动与优雅退出 | `TODO` |
-| **M0-10** | 配置文件模板与环境变量示例 | M0-02 | `configs/config.yaml` 与 `.env.example` 完整齐备 | `TODO` |
+| **M0-10** | 配置文件模板与环境变量示例 | M0-02 | `configs/config.yaml` 与 `.env.example` 完整齐备 | `DONE` |
 | **M0-11** | 本地 Compose 编排文件 | — | 宿主机端口映射：MySQL 3307、Redis 6380、RabbitMQ 5673 | `TODO` |
 | **M0-12** | Makefile 工程脚本 | M0-11 | 支持 `make up / down / migrate / run / test / vet` | `TODO` |
 | **M0-13** | GitHub Actions CI 工作流 | M0-12 | PR/Push 自动执行 `vet` + `test` + `build`；校验历史迁移脚本不变性 | `TODO` |

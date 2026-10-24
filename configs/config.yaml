@@ -1,0 +1,41 @@
+app:
+  name: "gorangefeed"
+  env: "development"
+  log_level: "info"
+  log_format: "text"
+
+server:
+  port: 8080
+  read_timeout: 10s
+  write_timeout: 10s
+
+mysql:
+  host: "127.0.0.1"
+  port: 3307
+  user: "root"
+  password: "root_password"
+  dbname: "gorangefeed"
+  params: "charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: 1h
+
+redis:
+  host: "127.0.0.1"
+  port: 6380
+  password: ""
+  db: 0
+  pool_size: 50
+
+rabbitmq:
+  host: "127.0.0.1"
+  port: 5673
+  user: "guest"
+  password: "guest"
+  vhost: "/"
+
+jwt:
+  access_secret: "gorangefeed_access_default_secret_key"
+  refresh_secret: "gorangefeed_refresh_default_secret_key"
+  access_ttl: 2h
+  refresh_ttl: 168h
