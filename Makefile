@@ -32,11 +32,11 @@ worker:
 
 # Run all tests with code coverage
 test:
-	go test -v -cover ./...
+	go test -v -cover ./internal/...
 
 # Run all tests with race detector
 test-race:
-	go test -v -race -cover ./...
+	go test -v -race -cover ./internal/...
 
 # Static code analysis
 vet:
