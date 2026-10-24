@@ -1,0 +1,45 @@
+# Binaries & build artifacts
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Test & coverage
+coverage.txt
+coverage.html
+coverage.out
+*.cover
+*.prof
+
+# Sensitive / local environment files
+.env
+.env.local
+.env.*.local
+!.env.example
+!configs/.env.example
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Workbuddy & AI assistant directories
+.workbuddy/
+.workbuddy
+.gemini/
+
+# Local media, uploads and runtime data
+storage/
+uploads/
+media/
+tmp/
+*.log
+logs/
