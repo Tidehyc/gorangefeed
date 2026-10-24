@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M0 骨架（进行中）** |
-| **完成进度** | M0 阶段：11 / 15 项 |
-| **进行中任务** | M0-12 (Makefile 工程脚本) |
+| **当前阶段** | **M0 骨架（已完成）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） |
+| **进行中任务** | 无 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 启动 **M0-12 ~ M0-15**：Makefile 工程脚本、CI 工作流、README 与全流程端到端验收 |
+| **下一步行动** | 启动 **M1**：账号域数据模型、密码哈希与双 Token 鉴权中间件 |
 
 ---
 
@@ -32,7 +32,7 @@
 
 | 里程碑 | 主题 | 关联需求 | 状态 | 核心完成标准 |
 |---|---|---|---|---|
-| **M0** | 工程骨架与基础设施装配 | NFR-MAINT-*, NFR-OBS-01 | `DOING` | `go vet` + `go test` 绿灯；`docker compose` 一键启动；`/readyz` 正确反映依赖状态，`/metrics` 输出标准指标 |
+| **M0** | 工程骨架与基础设施装配 | NFR-MAINT-*, NFR-OBS-01 | `DONE` | `go vet` + `go test` 绿灯；`docker compose` 一键启动；`/readyz` 正确反映依赖状态，`/metrics` 输出标准指标 |
 | **M1** | 账号、双 Token 与安全中间件 | FR-ACC-01~06, NFR-SEC-07 | `TODO` | 登录、刷新、登出及旧 Token 撤销全流程通过；软鉴权与频控限流测试通过 |
 | **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `TODO` | `e2e.sh` 跑通上传、发布与详情；视频路由支持 HTTP 206 Range 分段请求；`videos` 与 `video_stats` 数据一致 |
 | **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `TODO` | 200MB 文件断网 3 次重试续传成功；MySQL 位图权威状态保证无并发覆盖 |
@@ -59,10 +59,10 @@
 | **M0-09** | Worker 异步服务入口 | M0-06 | 独立进程入口，能正常启动与优雅退出 | `DONE` |
 | **M0-10** | 配置文件模板与环境变量示例 | M0-02 | `configs/config.yaml` 与 `.env.example` 完整齐备 | `DONE` |
 | **M0-11** | 本地 Compose 编排文件 | — | 宿主机端口映射：MySQL 3307、Redis 6380、RabbitMQ 5673 | `DONE` |
-| **M0-12** | Makefile 工程脚本 | M0-11 | 支持 `make up / down / migrate / run / test / vet` | `TODO` |
-| **M0-13** | GitHub Actions CI 工作流 | M0-12 | PR/Push 自动执行 `vet` + `test` + `build`；校验历史迁移脚本不变性 | `TODO` |
-| **M0-14** | 项目快速上手 README | — | 包含 10 分钟本地构建启动指引与架构简述 | `TODO` |
-| **M0-15** | M0 端到端全流程验证 | M0-08~13 | 全新环境下 `make up` → `make migrate` → `make run` → 探针与 metrics 正常 → `make test` 全绿 | `TODO` |
+| **M0-12** | Makefile 工程脚本 | M0-11 | 支持 `make up / down / migrate / run / test / vet` | `DONE` |
+| **M0-13** | GitHub Actions CI 工作流 | M0-12 | PR/Push 自动执行 `vet` + `test` + `build`；校验历史迁移脚本不变性 | `DONE` |
+| **M0-14** | 项目快速上手 README | — | 包含 10 分钟本地构建启动指引与架构简述 | `DONE` |
+| **M0-15** | M0 端到端全流程验证 | M0-08~13 | 全新环境下 `make up` → `make migrate` → `make run` → 探针与 metrics 正常 → `make test` 全绿 | `DONE` |
 
 > **边界约定**：M0 阶段不建业务数据表、不写业务 API Handler，数据库中仅初始化 `schema_migrations` 表。
 
