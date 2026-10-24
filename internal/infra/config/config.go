@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -15,10 +16,15 @@ import (
 type Config struct {
 	App      AppConfig      `yaml:"app"`
 	Server   ServerConfig   `yaml:"server"`
+	Worker   WorkerConfig   `yaml:"worker"`
 	MySQL    MySQLConfig    `yaml:"mysql"`
 	Redis    RedisConfig    `yaml:"redis"`
 	RabbitMQ RabbitMQConfig `yaml:"rabbitmq"`
 	JWT      JWTConfig      `yaml:"jwt"`
+}
+
+type WorkerConfig struct {
+	MetricsPort int `yaml:"metrics_port"`
 }
 
 type AppConfig struct {
@@ -98,7 +104,15 @@ func (q *RabbitMQConfig) URL() string {
 }
 
 // Load loads the configuration from a YAML file (if provided) and overrides it with environment variables.
+// It also automatically loads .env file if present in the current working directory.
 func Load(filePath string) (*Config, error) {
+	// Silently load .env if present
+	_ = godotenv.Load()
+
+	if filePath == "" {
+		filePath = os.Getenv("CONFIG_PATH")
+	}
+
 	cfg := &Config{
 		App: AppConfig{
 			Name:      "gorangefeed",
@@ -110,6 +124,9 @@ func Load(filePath string) (*Config, error) {
 			Port:         8080,
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 10 * time.Second,
+		},
+		Worker: WorkerConfig{
+			MetricsPort: 9091,
 		},
 		MySQL: MySQLConfig{
 			Host:            "127.0.0.1",
@@ -174,6 +191,11 @@ func applyEnvOverrides(cfg *Config) {
 	if val := os.Getenv("SERVER_PORT"); val != "" {
 		if p, err := strconv.Atoi(val); err == nil {
 			cfg.Server.Port = p
+		}
+	}
+	if val := os.Getenv("WORKER_METRICS_PORT"); val != "" {
+		if p, err := strconv.Atoi(val); err == nil {
+			cfg.Worker.MetricsPort = p
 		}
 	}
 
@@ -279,6 +301,11 @@ func Validate(cfg *Config) error {
 	// Server validation
 	if cfg.Server.Port <= 0 || cfg.Server.Port > 65535 {
 		return fmt.Errorf("invalid server.port: %d (must be between 1 and 65535)", cfg.Server.Port)
+	}
+
+	// Worker validation
+	if cfg.Worker.MetricsPort <= 0 || cfg.Worker.MetricsPort > 65535 {
+		return fmt.Errorf("invalid worker.metrics_port: %d (must be between 1 and 65535)", cfg.Worker.MetricsPort)
 	}
 
 	// MySQL validation

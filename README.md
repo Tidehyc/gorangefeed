@@ -26,12 +26,13 @@ GoRangeFeed 采用垂直切片（Vertical Slice）按业务领域组织代码，
 
 | 基础设施 / 组件 | 选型 | 宿主机端口映射 |
 |---|---|---|
-| 语言框架 | Go 1.22+ / Gin | `:8080` (API) |
+| 语言框架 | Go 1.22+ / Gin | `:8080` (API) / `:9091` (Worker Metrics) |
 | 关系型数据库 | MySQL 8.0 / GORM | `:3307` (映射容器 3306) |
 | 缓存与索引 | Redis 7.0 | `:6380` (映射容器 6379) |
 | 消息队列 | RabbitMQ 3-management | `:5673` (AMQP) / `:15673` (管理后台) |
+| 监控中心 | Prometheus 3.1.0 | `:9090` (Prometheus Web UI) |
 | 数据库迁移 | golang-migrate | `migrations/` |
-| 日志与监控 | `log/slog` + Prometheus | `/metrics` 端点 |
+| 日志与监控 | `log/slog` + Prometheus | API `:8080/metrics` / Worker `:9091/metrics` |
 
 ---
 
@@ -45,7 +46,7 @@ GoRangeFeed 采用垂直切片（Vertical Slice）按业务领域组织代码，
 
 ### 2. 启动基础依赖容器
 ```bash
-# 一键启动 MySQL 8.0, Redis 7.0, RabbitMQ
+# 一键启动 MySQL 8.0, Redis 7.0, RabbitMQ 3 与 Prometheus 监控
 make up
 ```
 
@@ -57,10 +58,10 @@ make migrate
 
 ### 4. 启动服务
 ```bash
-# 运行 API 服务
+# 运行 API 服务 (监听 :8080)
 make run
 
-# 或在另一终端运行 Worker 服务
+# 或在另一终端运行 Worker 服务 (监听 Metrics :9091)
 make worker
 ```
 
@@ -74,8 +75,14 @@ curl http://127.0.0.1:8080/healthz
 curl http://127.0.0.1:8080/readyz
 # 响应: {"components":{"mysql":"ok","rabbitmq":"ok","redis":"ok"},"status":"ready"}
 
-# 查看 Prometheus 指标
+# 查看 API 导出的 Prometheus 指标
 curl http://127.0.0.1:8080/metrics
+
+# 查看 Worker 导出的 Prometheus 指标
+curl http://127.0.0.1:9091/metrics
+
+# 访问 Prometheus Web 控制台查看拉取状态与监控大盘
+# 浏览器打开: http://127.0.0.1:9090
 ```
 
 ### 6. 测试与代码校验

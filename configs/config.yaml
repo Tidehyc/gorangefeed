@@ -9,6 +9,9 @@ server:
   read_timeout: 10s
   write_timeout: 10s
 
+worker:
+  metrics_port: 9091
+
 mysql:
   host: "127.0.0.1"
   port: 3307

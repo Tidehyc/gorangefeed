@@ -55,10 +55,11 @@ gorangefeed/
    - **时间规范**：统一输出 UTC RFC3339。
    - **媒体访问（HTTP 206 Range）**：文件资源统一通过 HTTP 路由（如 `/media/...`）或预签名 URL 提供，严禁暴露宿主机文件路径；**视频流媒体路由原生支持 HTTP 206 Partial Content（Range 请求）**，保障浏览器拖拽播放与边下边播体验。
    - **同源反代部署**：默认前端与 `/api` 挂在同源反代下，避免 CORS 与跨域 Cookie 复杂性。
-5. **核心中间件矩阵**：
-   - **`JWTAuth` 与 `SoftJWTAuth`**：写接口强制认证；Feed 浏览与视频详情挂载 `SoftJWTAuth`（无凭证视为游客匿名流，有合法凭证则注入 `userID`，用于查询点赞/关注态）。
+   - **配置与环境装载**：优先读取本地 `.env`（由 `godotenv` 静默加载）并支持环境变量全覆盖，启动期严格校验禁止 `clientFoundRows=true`，支持通过 `CONFIG_PATH` 自定义配置路径。
+5. **核心中间件与可观测性矩阵**：
+   - **`JWTAuth` 与 `SoftJWTAuth`**：写接口强制认证；Feed 浏览与视频详情挂载 `SoftJWTAuth`（无凭证视为游客匿名流，有合法凭证则注入 `userID`，用于查询点赞/关注态；**鉴权同时兼容 Header 与 URL Query `?token=...`，确保浏览器原生 `EventSource` 正常工作**）。
    - **`RateLimiter` 接口频控**：基于 Redis `INCR + PEXPIRE` 实现原子滑动窗口限流器，按 IP 限制登录注册（10次/分/IP），按 UserID 限制点赞/评论/关注（30次/分/UID），超限拦截返回 `rate_limited`。
-   - **`Prometheus Metrics`**：使用 `client_golang` 注册核心耗时直方图与计数器，通过 `/metrics` 端点导出标准指标。
+   - **`Prometheus Metrics`**：使用 `client_golang` 注册核心耗时直方图与计数器，API 暴露于 `:8080/metrics`，Worker 暴露于 `:9091/metrics`；由 Compose 中的 Prometheus 服务（`:9090`）基于 `configs/prometheus.yml` 统一拉取与监控。
 
 ### 2.3 技术栈选型
 

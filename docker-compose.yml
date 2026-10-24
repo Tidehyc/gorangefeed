@@ -52,7 +52,23 @@ services:
       timeout: 10s
       retries: 10
 
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: gorangefeed-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+
 volumes:
   mysql_data:
   redis_data:
   rabbitmq_data:
+  prometheus_data:

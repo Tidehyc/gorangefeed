@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,6 +17,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func main() {
@@ -58,6 +62,26 @@ func main() {
 	ctx, stopWorker := context.WithCancel(context.Background())
 	defer stopWorker()
 
+	// 5. Worker metrics HTTP server
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	metricsSrv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", cfg.Worker.MetricsPort),
+		Handler: metricsMux,
+	}
+
+	go func() {
+		l.Info("worker metrics server listening", "port", cfg.Worker.MetricsPort)
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			l.Error("worker metrics server error", "error", err)
+		}
+	}()
+
 	// Background worker loop placeholder (will house Outbox dispatcher and MQ consumers in M4/M5)
 	go func() {
 		ticker := time.NewTicker(5 * time.Second)
@@ -75,16 +99,22 @@ func main() {
 
 	l.Info("Worker service running and ready for event dispatching")
 
-	// 5. Signal handling for graceful shutdown
+	// 6. Signal handling for graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	l.Info("worker received termination signal", "signal", sig.String())
 
-	// 6. Stop worker processing
+	// 7. Stop worker processing and shutdown metrics server
 	stopWorker()
 
-	// 7. Cleanup resources
+	metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer metricsCancel()
+	if err := metricsSrv.Shutdown(metricsCtx); err != nil {
+		l.Warn("error shutting down worker metrics server", "error", err)
+	}
+
+	// 8. Cleanup resources
 	if err := mqConn.Close(); err != nil {
 		l.Warn("error closing RabbitMQ connection", "error", err)
 	}

@@ -17,6 +17,9 @@ func validBaseConfig() *Config {
 		Server: ServerConfig{
 			Port: 8080,
 		},
+		Worker: WorkerConfig{
+			MetricsPort: 9091,
+		},
 		MySQL: MySQLConfig{
 			Host:   "127.0.0.1",
 			Port:   3307,
@@ -154,6 +157,13 @@ func TestConfigValidation_IllegalValues(t *testing.T) {
 			},
 			errSubstr: "redis.db cannot be negative",
 		},
+		{
+			name: "invalid worker metrics port",
+			modifyFn: func(c *Config) {
+				c.Worker.MetricsPort = -1
+			},
+			errSubstr: "invalid worker.metrics_port",
+		},
 	}
 
 	for _, tc := range tests {
@@ -285,3 +295,32 @@ rabbitmq:
 		t.Errorf("RabbitMQ config override failed: %+v", cfg.RabbitMQ)
 	}
 }
+
+func TestLoad_EnvFileAndConfigPath(t *testing.T) {
+	tempDir := t.TempDir()
+	envPath := filepath.Join(tempDir, ".env")
+	envContent := "DB_USER=root\nDB_NAME=gorangefeed\nWORKER_METRICS_PORT=9099\n"
+	if err := os.WriteFile(envPath, []byte(envContent), 0644); err != nil {
+		t.Fatalf("failed to write .env: %v", err)
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+	defer func() {
+		_ = os.Chdir(oldWd)
+	}()
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("chdir failed: %v", err)
+	}
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("load config failed: %v", err)
+	}
+	if cfg.Worker.MetricsPort != 9099 {
+		t.Errorf("expected Worker.MetricsPort 9099 from .env, got %d", cfg.Worker.MetricsPort)
+	}
+}
+
