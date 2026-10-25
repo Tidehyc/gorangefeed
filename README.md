@@ -6,19 +6,19 @@
 
 ## 一、架构简述
 
-GoRangeFeed 采用垂直切片（Vertical Slice）按业务领域组织代码，杜绝空壳分层：
+GoRangeFeed 遵循**整洁架构（Clean Architecture）**分层设计，领域层（Domain）保持纯粹零外部框架依赖，通过依赖倒置驱动基础设施；端到端（E2E）黑盒测试与模块内白盒单测严格分流：
 
-* **API 入口 (`cmd/api`)**：依赖装配、探针中间件、统一信封响应、路由分发与优雅停机；
+* **API 入口 (`cmd/api`)**：依赖注入装配、探针中间件、统一信封响应、路由组分发与平滑优雅停机；
 * **Worker 入口 (`cmd/worker`)**：独立进程，负责 Outbox 事件派发与异步消费；
-* **业务域 (`internal/`)**：
-  * `account`：用户注册、登录、双 Token（Access + Refresh）轮转；
-  * `video`：单文件与分片上传、流式发布（HTTP 206 Range）；
-  * `interaction`：点赞（事务内行级锁驱动）、评论（客户端 `idempotency_key` 幂等）；
-  * `relation`：关注、取关、粉丝列表；
-  * `feed`：全局时间线（Redis ZSet + MySQL 冷热拼接）、关注流（推拉结合）；
-  * `notification`：通知落库、未读计数、SSE 实时推送；
-  * `outbox`：可靠事件投递与分布式租约调度；
-  * `infra`：MySQL、Redis、RabbitMQ 连接池装配、配置加载与日志监控。
+* **领域核心 (`internal/domain/`)**：纯业务实体、值对象与 Repository/TokenStore 抽象契约（覆盖 `account`、`video`、`interaction`、`relation`、`feed`、`notification`、`outbox`）；
+* **应用服务 (`internal/service/`)**：业务用例编排、状态机控制与事务协调（如双 Token 轮转与重放防护）；
+* **传输接口 (`internal/http/`)**：Gin 控制器、请求/响应 DTO、参数绑定校验与路由组挂载；
+* **持久化基础设施 (`internal/infra/persistence/`)**：GORM MySQL 实体仓储与 Redis Lua 脚本会话存储实现；
+* **基础设施 (`internal/infra/`)**：MySQL、Redis、RabbitMQ 连接池装配、JWT 管理、本地头像与媒体存储、配置加载与日志监控；
+* **测试中心 (`test/`)**：
+  * `test/e2e/`：独立运行的端到端黑盒生命周期测试；
+  * `test/testutil/`：集成测试脚手架与 HTTP 辅助库；
+  * 模块单元测试（`*_test.go`）保留在各层代码旁，便于白盒测试。
 
 ---
 

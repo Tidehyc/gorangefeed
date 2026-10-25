@@ -22,32 +22,65 @@ GoRangeFeed 是一个短视频 Feed 流后端系统，覆盖「发布 → 分发
 ## 二、架构设计与工程约束
 
 ### 2.1 整体架构拓扑
-系统采用**垂直切片架构（Vertical Slice）**，按业务领域组织代码结构，杜绝空壳分层：
+系统遵循**整洁架构（Clean Architecture）**，保持业务领域核心的纯粹性与依赖向内单向流动；同时采用工业界标准的测试分流组织（黑盒 E2E 测试位于根目录 `/test`，单元测试伴随源码）：
 
 ```
 gorangefeed/
   cmd/
     api/                   # HTTP 入口：依赖装配、中间件挂载、路由注册、优雅停机
+    migrate/               # 数据库版本迁移工具：支持自定义迁移表、up/down/force
     worker/                # 异步 Worker：Outbox 调度器与事件消费者
   internal/
-    account/               # 账号域：用户注册登录、双 Token 鉴权
-    video/                 # 视频域：视频上传、元数据管理与下架
-    interaction/           # 互动域：点赞、评论（支持 IdempotencyKey）
-    relation/              # 关系域：用户关注、粉丝
-    feed/                  # Feed 域：全局时间线、推拉结合关注流、多级缓存与游标分页
-    notification/          # 通知域：通知落库、未读数、SSE 实时推送
-    outbox/                # 可靠事件投递：事务内落库、分布式租约派发
-    infra/                 # 基础设施实现：MySQL、Redis、RabbitMQ、JWT、Config、Metrics
+    domain/                # 领域层（纯业务实体、值对象、Repository/Store 抽象契约，零外部依赖）
+      account/             # 账户领域：User 聚合根、UserStatus、Password 校验与哈希
+      video/               # 视频领域：Video 元数据、ChunkUpload 分块实体、Quality 规格
+      interaction/         # 互动领域：Like、Comment 树、Favorite 收藏、Counter 计数实体
+      relation/            # 关系领域：Follow 关注关系图、Friend 好友判定
+      feed/                # 动态领域：FeedItem、Timeline 索引模型、推拉混合策略
+      notification/        # 通知领域：Notification 事件、Message 消息类型与未读模型
+      outbox/              # 本地消息表实体与事件状态机
+    service/               # 应用服务层（业务用例编排、事务边界与跨组件协调）
+      account/             # 注册、登录凭证校验、双 Token 轮转与重放防御、资料更新
+      video/ interaction/ relation/ feed/ notification/
+    http/                  # 传输适配层（Gin 控制器、请求/响应 DTO、参数校验与路由组定义）
+      account/             # 账号路由、会话维护与媒体头像控制器
+      video/ interaction/ relation/ feed/ notification/
+    infra/                 # 基础设施层（外部组件与具体技术驱动）
+      config/              # 配置加载、环境变量覆盖、参数合法性强校验
+      jwt/                 # JWT 令牌签发、对称加密验签与 Claims 解析
+      logger/              # slog 结构化日志驱动
+      middleware/          # 鉴权/软鉴权、Redis 原子滑动窗口频控、请求耗时与 Recovery
+      migration/           # 数据库版本化迁移引擎（支持表名隔离以杜绝并发测试冲突）
+      mysql/               # MySQL 8.0 连接池装配与存活探针
+      rabbitmq/            # RabbitMQ AMQP 连接池与发布确认
+      redis/               # Redis 7.0 客户端与健康检查
+      response/            # 统一 API 信封与标准错误码转换器
+      router/              # Gin 引擎初始化、探针与媒体路由装配
+      storage/             # 本地安全媒体存储（防路径穿越与大小/MIME校验）
+      outbox/              # 事务性本地消息发布器与轮询派发调度器
+      persistence/         # 持久化具体实现（GORM MySQL 仓储与 Redis 缓存/Lua 脚本）
+        account/           # 账号持久化与 Redis 会话/黑名单存储
+        video/ interaction/ relation/ feed/ notification/
+  test/                    # 独立黑盒测试目录
+    e2e/                   # 端到端全链路验收测试（如 account_lifecycle_test.go）
+    testutil/              # 集成测试夹具与 HTTP 快速断言工具
   migrations/              # 数据库版本化迁移脚本（golang-migrate 格式）
-  scripts/                 # 验收与压测脚本（e2e.sh）
+  scripts/                 # 验收、构建与运维脚本
+  configs/                 # 生产/测试配置模板
   web/                     # 前端静态资源目录（一期留空占位）
 ```
 
-### 2.2 核心工程纪律与中间件规范
-1. **按域分包，包内分层**：领域模型与逻辑紧凑内聚，不抽象虚设的多层接口。
-2. **消费者侧定义接口**：Repository 等外部依赖接口由业务调用方声明，实现由 `internal/infra` 提供；域间不直接依赖对方的 Repository 实现。
-3. **跨域通过 Service 或只读视图交互**：严禁跨域直接操作对方数据库表。
-4. **统一协议与规范**：
+### 2.2 核心工程纪律与分层规范
+1. **依赖单向流动（Dependency Inversion）**：
+   - 依赖关系仅能由外向内：`HTTP / Persistence / Infra -> Service -> Domain`。
+   - 领域层（`internal/domain`）严禁导入任何外部框架（无 GORM、无 Gin、无 Redis 驱动）。
+2. **测试分流与测试隔离（Test Isolation）**：
+   - **单元测试（Unit Test）**：伴随各包存放（如 `password_test.go`、`service_test.go`、`handler_test.go`），支持包内白盒测试。
+   - **端到端测试（E2E Test）**：统一放置在根目录 `test/e2e/`，通过黑盒调用公共 HTTP 接口验证完整生命周期。
+   - **迁移状态隔离**：集成测试严禁污染全局 `schema_migrations`，迁移单元测试使用独立的 `schema_migrations_test` 并在完成后自动回收。
+3. **消费者侧定义接口**：Repository 等外部依赖接口由业务调用方声明，实现由 `internal/infra/persistence` 提供；跨域不直接依赖对方的 Repository 实现。
+4. **跨域通过 Service 或只读视图交互**：严禁跨域直接操作对方数据库表。
+5. **统一协议与规范**：
    - **路由前缀**：公网 API 统一为 `/api`，内部受信接口为 `/internal`（独立 Token 校验）。
    - **响应格式**：成功 `{"data": ..., "error": null}`；失败 `{"data": null, "error": {"code": "...", "message": "..."}}`。
    - **错误码枚举**：使用字符串定义（`invalid_param`、`unauthorized`、`forbidden`、`not_found`、`conflict`、`rate_limited`、`internal`）。
