@@ -1,4 +1,4 @@
-package account
+package e2e_test
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
@@ -31,8 +32,8 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		for _, candidate := range []string{
-			"../../../configs/config.yaml",
 			"../../configs/config.yaml",
+			"../../../configs/config.yaml",
 			"configs/config.yaml",
 			"../configs/config.yaml",
 		} {
@@ -56,9 +57,9 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	}
 
 	// Ensure database schema is migrated for E2E tests
-	migrationsDir := "../../../migrations"
+	migrationsDir := "../../migrations"
 	if _, err := os.Stat(migrationsDir); err != nil {
-		for _, cand := range []string{"../../migrations", "migrations", "../migrations"} {
+		for _, cand := range []string{"migrations", "../migrations", "../../../migrations"} {
 			if _, err := os.Stat(cand); err == nil {
 				migrationsDir = cand
 				break
@@ -89,7 +90,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	tokenStore := persistenceaccount.NewTokenStore(rdb)
 	jwtMgr := jwt.NewTokenManager(cfg.JWT)
 	svc := serviceaccount.NewService(repo, tokenStore, jwtMgr, cfg.JWT)
-	handler := NewHandler(svc, jwtMgr, avatarStorage)
+	handler := httpaccount.NewHandler(svc, jwtMgr, avatarStorage)
 
 	gin.SetMode(gin.TestMode)
 	engine := router.NewRouter(router.DependencyChecks{
@@ -98,7 +99,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	})
 
 	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
-	RegisterRoutes(engine, handler, jwtMgr, tokenStore, rdb)
+	httpaccount.RegisterRoutes(engine, handler, jwtMgr, tokenStore, rdb)
 
 	cleanup := func() {
 		_ = os.RemoveAll(tempDir)
@@ -156,7 +157,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 1.1 密码强度不足 -> 400 invalid_param
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/register", RegisterRequest{Username: testUser, Password: "123"}, ipRegister))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/register", httpaccount.RegisterRequest{Username: testUser, Password: "123"}, ipRegister))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for weak password, got %d: %s", w.Code, w.Body.String())
 	}
@@ -168,12 +169,12 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 1.2 成功注册 -> 201 Created
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/register", RegisterRequest{Username: testUser, Password: testPass}, ipRegister))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/register", httpaccount.RegisterRequest{Username: testUser, Password: testPass}, ipRegister))
 	if w.Code != http.StatusCreated {
 		t.Fatalf("expected 201 Created for register, got %d: %s", w.Code, w.Body.String())
 	}
 	var regResp struct {
-		Data UserProfileResponse `json:"data"`
+		Data httpaccount.UserProfileResponse `json:"data"`
 	}
 	parseJSONResponse(t, w, &regResp)
 	if regResp.Data.ID <= 0 || regResp.Data.Username != testUser {
@@ -183,7 +184,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 1.3 用户名重复注册 -> 409 Conflict
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/register", RegisterRequest{Username: testUser, Password: testPass}, ipRegister))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/register", httpaccount.RegisterRequest{Username: testUser, Password: testPass}, ipRegister))
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict for duplicate username, got %d: %s", w.Code, w.Body.String())
 	}
@@ -199,19 +200,19 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 2.1 凭证错误 -> 401 Unauthorized
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", LoginRequest{Username: testUser, Password: "WrongPassword999"}, ipLogin))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{Username: testUser, Password: "WrongPassword999"}, ipLogin))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for wrong credentials, got %d: %s", w.Code, w.Body.String())
 	}
 
 	// 2.2 登录成功 -> 200 OK + Access + Refresh Token
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", LoginRequest{Username: testUser, Password: testPass}, ipLogin))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{Username: testUser, Password: testPass}, ipLogin))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK for login, got %d: %s", w.Code, w.Body.String())
 	}
 	var loginResp struct {
-		Data LoginResponse `json:"data"`
+		Data httpaccount.LoginResponse `json:"data"`
 	}
 	parseJSONResponse(t, w, &loginResp)
 	accessToken := loginResp.Data.Tokens.AccessToken
@@ -244,7 +245,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 	}
 
 	// 3.3 更新个人资料 PUT /users/me
-	reqUpdate := newJSONRequest(http.MethodPut, "/api/v1/users/me", UpdateProfileRequest{
+	reqUpdate := newJSONRequest(http.MethodPut, "/api/v1/users/me", httpaccount.UpdateProfileRequest{
 		Nickname: "E2E Nickname",
 		Bio:      "E2E Bio description",
 	}, "")
@@ -255,7 +256,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 		t.Fatalf("expected 200 for update profile, got %d: %s", w.Code, w.Body.String())
 	}
 	var updatedResp struct {
-		Data UserProfileResponse `json:"data"`
+		Data httpaccount.UserProfileResponse `json:"data"`
 	}
 	parseJSONResponse(t, w, &updatedResp)
 	if updatedResp.Data.Nickname != "E2E Nickname" || updatedResp.Data.Bio != "E2E Bio description" {
@@ -270,7 +271,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 		t.Fatalf("expected 200 for public profile, got %d", w.Code)
 	}
 	var pubResp struct {
-		Data PublicUserProfileResponse `json:"data"`
+		Data httpaccount.PublicUserProfileResponse `json:"data"`
 	}
 	parseJSONResponse(t, w, &pubResp)
 	if pubResp.Data.ID != createdUserID || pubResp.Data.Nickname != "E2E Nickname" {
@@ -328,7 +329,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 5.1 正常轮转：使用 refreshToken 换新
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", RefreshRequest{RefreshToken: refreshToken}, ipRefresh))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", httpaccount.RefreshRequest{RefreshToken: refreshToken}, ipRefresh))
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for refresh token, got %d: %s", w.Code, w.Body.String())
 	}
@@ -353,14 +354,14 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 5.3 重放攻击检测：故意再次使用已轮转作废的旧 refreshToken
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", RefreshRequest{RefreshToken: refreshToken}, ipRefresh))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", httpaccount.RefreshRequest{RefreshToken: refreshToken}, ipRefresh))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 Unauthorized for replay attack, got %d", w.Code)
 	}
 
 	// 5.4 验证重放防护已瞬间销毁整个会话：即使刚刚换发的 newRefreshToken 也被强制吊销
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", RefreshRequest{RefreshToken: newRefreshToken}, ipRefresh))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", httpaccount.RefreshRequest{RefreshToken: newRefreshToken}, ipRefresh))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 after session revocation, got %d", w.Code)
 	}
@@ -371,19 +372,19 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 重新登录获取有效 Token 进行登出测试
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", LoginRequest{Username: testUser, Password: testPass}, ipLogout))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{Username: testUser, Password: testPass}, ipLogout))
 	if w.Code != http.StatusOK {
 		t.Fatalf("re-login failed: %d", w.Code)
 	}
 	var reloginResp struct {
-		Data LoginResponse `json:"data"`
+		Data httpaccount.LoginResponse `json:"data"`
 	}
 	parseJSONResponse(t, w, &reloginResp)
 	activeAccess := reloginResp.Data.Tokens.AccessToken
 	activeRefresh := reloginResp.Data.Tokens.RefreshToken
 
 	// 正常退出登录 POST /api/v1/auth/logout
-	reqLogout := newJSONRequest(http.MethodPost, "/api/v1/auth/logout", LogoutRequest{RefreshToken: activeRefresh}, ipLogout)
+	reqLogout := newJSONRequest(http.MethodPost, "/api/v1/auth/logout", httpaccount.LogoutRequest{RefreshToken: activeRefresh}, ipLogout)
 	reqLogout.Header.Set("Authorization", "Bearer "+activeAccess)
 	w = httptest.NewRecorder()
 	engine.ServeHTTP(w, reqLogout)
@@ -402,7 +403,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 退出登录后：尝试使用刚才登出的 Refresh Token 刷新 -> 必须被拦截 (401)
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", RefreshRequest{RefreshToken: activeRefresh}, ipLogout))
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", httpaccount.RefreshRequest{RefreshToken: activeRefresh}, ipLogout))
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 Unauthorized for revoked refresh session, got %d", w.Code)
 	}
@@ -412,7 +413,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 	// ==========================================
 	for i := 1; i <= 10; i++ {
 		w = httptest.NewRecorder()
-		engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", LoginRequest{
+		engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{
 			Username: fmt.Sprintf("probe_user_%d", i),
 			Password: "SomePass123",
 		}, ipRateTest))
@@ -423,7 +424,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 
 	// 第 11 次请求应立即触发 429 Too Many Requests
 	w = httptest.NewRecorder()
-	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", LoginRequest{
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{
 		Username: "probe_user_11",
 		Password: "SomePass123",
 	}, ipRateTest))
