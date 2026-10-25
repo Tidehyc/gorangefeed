@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -25,6 +26,9 @@ func getTestRedisClient(t *testing.T) *redis.Client {
 
 func TestRedisTokenStore_SessionLifecycleAndReplay(t *testing.T) {
 	client := getTestRedisClient(t)
+	if client == nil {
+		return
+	}
 	defer client.Close()
 
 	ctx := context.Background()
@@ -51,7 +55,7 @@ func TestRedisTokenStore_SessionLifecycleAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RotateSession failed: %v", err)
 	}
-	if res != RotationOK {
+	if res != domainaccount.RotationOK {
 		t.Fatalf("expected RotationOK, got %v", res)
 	}
 
@@ -60,7 +64,7 @@ func TestRedisTokenStore_SessionLifecycleAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RotateSession failed on replay attempt: %v", err)
 	}
-	if res != RotationReplayDetected {
+	if res != domainaccount.RotationReplayDetected {
 		t.Fatalf("expected RotationReplayDetected, got %v", res)
 	}
 
@@ -69,13 +73,16 @@ func TestRedisTokenStore_SessionLifecycleAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RotateSession failed after replay: %v", err)
 	}
-	if res != RotationSessionNotFound {
+	if res != domainaccount.RotationSessionNotFound {
 		t.Fatalf("expected RotationSessionNotFound after replay revocation, got %v", res)
 	}
 }
 
 func TestRedisTokenStore_Blacklist(t *testing.T) {
 	client := getTestRedisClient(t)
+	if client == nil {
+		return
+	}
 	defer client.Close()
 
 	ctx := context.Background()
@@ -98,12 +105,22 @@ func TestRedisTokenStore_Blacklist(t *testing.T) {
 		t.Fatalf("BlacklistAccessToken failed: %v", err)
 	}
 
-	// Now should be blacklisted
+	// Now blacklisted
 	isBlacklisted, err = store.IsAccessTokenBlacklisted(ctx, tokenID)
 	if err != nil {
 		t.Fatalf("check blacklist failed: %v", err)
 	}
 	if !isBlacklisted {
 		t.Fatalf("expected token to be blacklisted")
+	}
+
+	// Wait for expiration
+	time.Sleep(2100 * time.Millisecond)
+	isBlacklisted, err = store.IsAccessTokenBlacklisted(ctx, tokenID)
+	if err != nil {
+		t.Fatalf("check blacklist failed: %v", err)
+	}
+	if isBlacklisted {
+		t.Fatalf("expected token to expire from blacklist")
 	}
 }

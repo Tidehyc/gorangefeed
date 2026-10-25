@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
@@ -22,24 +23,24 @@ type TokenPair struct {
 
 // Service defines application-level use cases for accounts.
 type Service interface {
-	Register(ctx context.Context, username, password string) (*User, error)
-	Login(ctx context.Context, username, password string) (*TokenPair, *User, error)
+	Register(ctx context.Context, username, password string) (*domainaccount.User, error)
+	Login(ctx context.Context, username, password string) (*TokenPair, *domainaccount.User, error)
 	RefreshToken(ctx context.Context, refreshTokenStr string) (*TokenPair, error)
 	Logout(ctx context.Context, sessionID, accessTokenStr string) error
-	GetProfile(ctx context.Context, userID int64) (*User, error)
-	UpdateProfile(ctx context.Context, userID int64, nickname, bio string) (*User, error)
+	GetProfile(ctx context.Context, userID int64) (*domainaccount.User, error)
+	UpdateProfile(ctx context.Context, userID int64, nickname, bio string) (*domainaccount.User, error)
 	UpdateAvatar(ctx context.Context, userID int64, avatarURL string) error
 }
 
 type service struct {
-	repo       Repository
-	tokenStore TokenStore
+	repo       domainaccount.Repository
+	tokenStore domainaccount.TokenStore
 	jwtManager *jwt.TokenManager
 	cfg        config.JWTConfig
 }
 
-// NewService creates a new account Service.
-func NewService(repo Repository, tokenStore TokenStore, jwtManager *jwt.TokenManager, cfg config.JWTConfig) Service {
+// NewService creates a new account application Service.
+func NewService(repo domainaccount.Repository, tokenStore domainaccount.TokenStore, jwtManager *jwt.TokenManager, cfg config.JWTConfig) Service {
 	return &service{
 		repo:       repo,
 		tokenStore: tokenStore,
@@ -48,28 +49,28 @@ func NewService(repo Repository, tokenStore TokenStore, jwtManager *jwt.TokenMan
 	}
 }
 
-func (s *service) Register(ctx context.Context, username, password string) (*User, error) {
-	if err := ValidateUsername(username); err != nil {
+func (s *service) Register(ctx context.Context, username, password string) (*domainaccount.User, error) {
+	if err := domainaccount.ValidateUsername(username); err != nil {
 		return nil, response.ErrInvalidParam(err.Error())
 	}
-	if err := ValidatePassword(password); err != nil {
+	if err := domainaccount.ValidatePassword(password); err != nil {
 		return nil, response.ErrInvalidParam(err.Error())
 	}
 
-	hash, err := HashPassword(password)
+	hash, err := domainaccount.HashPassword(password)
 	if err != nil {
 		return nil, fmt.Errorf("hash password failed: %w", err)
 	}
 
-	user := &User{
+	user := &domainaccount.User{
 		Username:     username,
 		PasswordHash: hash,
 		Nickname:     username,
-		Status:       UserStatusActive,
+		Status:       domainaccount.UserStatusActive,
 	}
 
 	if err := s.repo.Create(ctx, user); err != nil {
-		if errors.Is(err, ErrUsernameDuplicate) {
+		if errors.Is(err, domainaccount.ErrUsernameTaken) {
 			return nil, response.ErrConflict("Username is already taken")
 		}
 		return nil, err
@@ -78,20 +79,20 @@ func (s *service) Register(ctx context.Context, username, password string) (*Use
 	return user, nil
 }
 
-func (s *service) Login(ctx context.Context, username, password string) (*TokenPair, *User, error) {
+func (s *service) Login(ctx context.Context, username, password string) (*TokenPair, *domainaccount.User, error) {
 	user, err := s.repo.FindByUsername(ctx, username)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
 			return nil, nil, response.ErrUnauthorized("Invalid username or password")
 		}
 		return nil, nil, err
 	}
 
-	if user.Status != UserStatusActive {
+	if user.Status != domainaccount.UserStatusActive {
 		return nil, nil, response.ErrForbidden("User account is inactive or suspended")
 	}
 
-	if !CheckPassword(password, user.PasswordHash) {
+	if !domainaccount.CheckPassword(password, user.PasswordHash) {
 		return nil, nil, response.ErrUnauthorized("Invalid username or password")
 	}
 
@@ -136,11 +137,11 @@ func (s *service) RefreshToken(ctx context.Context, refreshTokenStr string) (*To
 	}
 
 	switch rotationResult {
-	case RotationSessionNotFound:
+	case domainaccount.RotationSessionNotFound:
 		return nil, response.ErrUnauthorized("Session expired or already logged out")
-	case RotationReplayDetected:
+	case domainaccount.RotationReplayDetected:
 		return nil, response.ErrUnauthorized("Security violation: Token replay detected. Session terminated.")
-	case RotationOK:
+	case domainaccount.RotationOK:
 		// Succeeded
 	default:
 		return nil, response.ErrUnauthorized("Unable to validate token rotation")
@@ -183,10 +184,10 @@ func (s *service) Logout(ctx context.Context, sessionID, accessTokenStr string) 
 	return nil
 }
 
-func (s *service) GetProfile(ctx context.Context, userID int64) (*User, error) {
+func (s *service) GetProfile(ctx context.Context, userID int64) (*domainaccount.User, error) {
 	user, err := s.repo.FindByID(ctx, userID)
 	if err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
 			return nil, response.ErrNotFound("User not found")
 		}
 		return nil, err
@@ -194,7 +195,7 @@ func (s *service) GetProfile(ctx context.Context, userID int64) (*User, error) {
 	return user, nil
 }
 
-func (s *service) UpdateProfile(ctx context.Context, userID int64, nickname, bio string) (*User, error) {
+func (s *service) UpdateProfile(ctx context.Context, userID int64, nickname, bio string) (*domainaccount.User, error) {
 	if len(nickname) > 64 {
 		return nil, response.ErrInvalidParam("Nickname length cannot exceed 64 characters")
 	}
@@ -203,7 +204,7 @@ func (s *service) UpdateProfile(ctx context.Context, userID int64, nickname, bio
 	}
 
 	if err := s.repo.UpdateProfile(ctx, userID, nickname, bio); err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
 			return nil, response.ErrNotFound("User not found")
 		}
 		return nil, err
@@ -214,7 +215,7 @@ func (s *service) UpdateProfile(ctx context.Context, userID int64, nickname, bio
 
 func (s *service) UpdateAvatar(ctx context.Context, userID int64, avatarURL string) error {
 	if err := s.repo.UpdateAvatar(ctx, userID, avatarURL); err != nil {
-		if errors.Is(err, ErrUserNotFound) {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
 			return response.ErrNotFound("User not found")
 		}
 		return err

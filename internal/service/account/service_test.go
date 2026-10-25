@@ -5,27 +5,28 @@ import (
 	"testing"
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 )
 
 type mockRepository struct {
-	usersByID       map[int64]*User
-	usersByUsername map[string]*User
+	usersByID       map[int64]*domainaccount.User
+	usersByUsername map[string]*domainaccount.User
 	nextID          int64
 }
 
 func newMockRepository() *mockRepository {
 	return &mockRepository{
-		usersByID:       make(map[int64]*User),
-		usersByUsername: make(map[string]*User),
+		usersByID:       make(map[int64]*domainaccount.User),
+		usersByUsername: make(map[string]*domainaccount.User),
 		nextID:          1,
 	}
 }
 
-func (m *mockRepository) Create(ctx context.Context, u *User) error {
+func (m *mockRepository) Create(ctx context.Context, u *domainaccount.User) error {
 	if _, exists := m.usersByUsername[u.Username]; exists {
-		return ErrUsernameDuplicate
+		return domainaccount.ErrUsernameTaken
 	}
 	u.ID = m.nextID
 	m.nextID++
@@ -34,18 +35,18 @@ func (m *mockRepository) Create(ctx context.Context, u *User) error {
 	return nil
 }
 
-func (m *mockRepository) FindByID(ctx context.Context, id int64) (*User, error) {
+func (m *mockRepository) FindByID(ctx context.Context, id int64) (*domainaccount.User, error) {
 	u, ok := m.usersByID[id]
 	if !ok {
-		return nil, ErrUserNotFound
+		return nil, domainaccount.ErrUserNotFound
 	}
 	return u, nil
 }
 
-func (m *mockRepository) FindByUsername(ctx context.Context, username string) (*User, error) {
+func (m *mockRepository) FindByUsername(ctx context.Context, username string) (*domainaccount.User, error) {
 	u, ok := m.usersByUsername[username]
 	if !ok {
-		return nil, ErrUserNotFound
+		return nil, domainaccount.ErrUserNotFound
 	}
 	return u, nil
 }
@@ -53,7 +54,7 @@ func (m *mockRepository) FindByUsername(ctx context.Context, username string) (*
 func (m *mockRepository) UpdateProfile(ctx context.Context, id int64, nickname, bio string) error {
 	u, ok := m.usersByID[id]
 	if !ok {
-		return ErrUserNotFound
+		return domainaccount.ErrUserNotFound
 	}
 	u.Nickname = nickname
 	u.Bio = bio
@@ -63,7 +64,7 @@ func (m *mockRepository) UpdateProfile(ctx context.Context, id int64, nickname, 
 func (m *mockRepository) UpdateAvatar(ctx context.Context, id int64, avatarURL string) error {
 	u, ok := m.usersByID[id]
 	if !ok {
-		return ErrUserNotFound
+		return domainaccount.ErrUserNotFound
 	}
 	u.AvatarURL = avatarURL
 	return nil
@@ -86,17 +87,17 @@ func (m *mockTokenStore) CreateSession(ctx context.Context, sessionID, tokenID s
 	return nil
 }
 
-func (m *mockTokenStore) RotateSession(ctx context.Context, sessionID, oldTokenID, newTokenID string, ttl time.Duration) (RotationResult, error) {
+func (m *mockTokenStore) RotateSession(ctx context.Context, sessionID, oldTokenID, newTokenID string, ttl time.Duration) (domainaccount.RotationResult, error) {
 	cur, ok := m.sessions[sessionID]
 	if !ok {
-		return RotationSessionNotFound, nil
+		return domainaccount.RotationSessionNotFound, nil
 	}
 	if cur != oldTokenID {
 		delete(m.sessions, sessionID) // replay attack detected
-		return RotationReplayDetected, nil
+		return domainaccount.RotationReplayDetected, nil
 	}
 	m.sessions[sessionID] = newTokenID
-	return RotationOK, nil
+	return domainaccount.RotationOK, nil
 }
 
 func (m *mockTokenStore) RevokeSession(ctx context.Context, sessionID string) error {

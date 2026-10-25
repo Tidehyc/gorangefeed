@@ -3,6 +3,7 @@ package account
 import (
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/middleware"
 	"github.com/gin-gonic/gin"
@@ -10,7 +11,7 @@ import (
 )
 
 // RegisterRoutes registers all account domain routes and associates security middlewares.
-func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenStore TokenStore, rdb *redis.Client) {
+func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenStore domainaccount.TokenStore, rdb *redis.Client) {
 	v1 := r.Group("/api/v1")
 
 	// 1. Auth routes with IP rate limiting (10 requests per minute per IP per DESIGN.md)

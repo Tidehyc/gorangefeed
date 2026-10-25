@@ -2,6 +2,7 @@ package account
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
@@ -10,15 +11,121 @@ import (
 	"testing"
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/middleware"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
+	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	"github.com/gin-gonic/gin"
 )
 
-func setupTestHandler(t *testing.T) (*Handler, Service, *jwt.TokenManager, *storage.AvatarStorage, string) {
+type mockRepository struct {
+	usersByID       map[int64]*domainaccount.User
+	usersByUsername map[string]*domainaccount.User
+	nextID          int64
+}
+
+func newMockRepository() *mockRepository {
+	return &mockRepository{
+		usersByID:       make(map[int64]*domainaccount.User),
+		usersByUsername: make(map[string]*domainaccount.User),
+		nextID:          1,
+	}
+}
+
+func (m *mockRepository) Create(ctx context.Context, u *domainaccount.User) error {
+	if _, exists := m.usersByUsername[u.Username]; exists {
+		return domainaccount.ErrUsernameTaken
+	}
+	u.ID = m.nextID
+	m.nextID++
+	m.usersByID[u.ID] = u
+	m.usersByUsername[u.Username] = u
+	return nil
+}
+
+func (m *mockRepository) FindByID(ctx context.Context, id int64) (*domainaccount.User, error) {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return nil, domainaccount.ErrUserNotFound
+	}
+	return u, nil
+}
+
+func (m *mockRepository) FindByUsername(ctx context.Context, username string) (*domainaccount.User, error) {
+	u, ok := m.usersByUsername[username]
+	if !ok {
+		return nil, domainaccount.ErrUserNotFound
+	}
+	return u, nil
+}
+
+func (m *mockRepository) UpdateProfile(ctx context.Context, id int64, nickname, bio string) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.Nickname = nickname
+	u.Bio = bio
+	return nil
+}
+
+func (m *mockRepository) UpdateAvatar(ctx context.Context, id int64, avatarURL string) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.AvatarURL = avatarURL
+	return nil
+}
+
+type mockTokenStore struct {
+	sessions    map[string]string
+	blacklisted map[string]bool
+}
+
+func newMockTokenStore() *mockTokenStore {
+	return &mockTokenStore{
+		sessions:    make(map[string]string),
+		blacklisted: make(map[string]bool),
+	}
+}
+
+func (m *mockTokenStore) CreateSession(ctx context.Context, sessionID, tokenID string, ttl time.Duration) error {
+	m.sessions[sessionID] = tokenID
+	return nil
+}
+
+func (m *mockTokenStore) RotateSession(ctx context.Context, sessionID, oldTokenID, newTokenID string, ttl time.Duration) (domainaccount.RotationResult, error) {
+	cur, ok := m.sessions[sessionID]
+	if !ok {
+		return domainaccount.RotationSessionNotFound, nil
+	}
+	if cur != oldTokenID {
+		delete(m.sessions, sessionID)
+		return domainaccount.RotationReplayDetected, nil
+	}
+	m.sessions[sessionID] = newTokenID
+	return domainaccount.RotationOK, nil
+}
+
+func (m *mockTokenStore) RevokeSession(ctx context.Context, sessionID string) error {
+	delete(m.sessions, sessionID)
+	return nil
+}
+
+func (m *mockTokenStore) BlacklistAccessToken(ctx context.Context, tokenID string, ttl time.Duration) error {
+	m.blacklisted[tokenID] = true
+	return nil
+}
+
+func (m *mockTokenStore) IsAccessTokenBlacklisted(ctx context.Context, tokenID string) (bool, error) {
+	return m.blacklisted[tokenID], nil
+}
+
+func setupTestHandler(t *testing.T) (*Handler, serviceaccount.Service, *jwt.TokenManager, *storage.AvatarStorage, string) {
 	tempDir, err := os.MkdirTemp("", "gorangefeed_handler_test_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
@@ -33,7 +140,7 @@ func setupTestHandler(t *testing.T) (*Handler, Service, *jwt.TokenManager, *stor
 	jwtMgr := jwt.NewTokenManager(cfg)
 	repo := newMockRepository()
 	store := newMockTokenStore()
-	svc := NewService(repo, store, jwtMgr, cfg)
+	svc := serviceaccount.NewService(repo, store, jwtMgr, cfg)
 	avatarStorage, err := storage.NewAvatarStorage(tempDir)
 	if err != nil {
 		t.Fatalf("failed to create avatar storage: %v", err)

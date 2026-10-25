@@ -17,10 +17,12 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
+	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
+	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	"github.com/gin-gonic/gin"
 )
 
@@ -29,6 +31,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	configPath := os.Getenv("CONFIG_PATH")
 	if configPath == "" {
 		for _, candidate := range []string{
+			"../../../configs/config.yaml",
 			"../../configs/config.yaml",
 			"configs/config.yaml",
 			"../configs/config.yaml",
@@ -53,9 +56,9 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	}
 
 	// Ensure database schema is migrated for E2E tests
-	migrationsDir := "../../migrations"
+	migrationsDir := "../../../migrations"
 	if _, err := os.Stat(migrationsDir); err != nil {
-		for _, cand := range []string{"migrations", "../migrations"} {
+		for _, cand := range []string{"../../migrations", "migrations", "../migrations"} {
 			if _, err := os.Stat(cand); err == nil {
 				migrationsDir = cand
 				break
@@ -82,10 +85,10 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 		t.Fatalf("failed to create avatar storage: %v", err)
 	}
 
-	repo := NewRepository(db)
-	tokenStore := NewTokenStore(rdb)
+	repo := persistenceaccount.NewRepository(db)
+	tokenStore := persistenceaccount.NewTokenStore(rdb)
 	jwtMgr := jwt.NewTokenManager(cfg.JWT)
-	svc := NewService(repo, tokenStore, jwtMgr, cfg.JWT)
+	svc := serviceaccount.NewService(repo, tokenStore, jwtMgr, cfg.JWT)
 	handler := NewHandler(svc, jwtMgr, avatarStorage)
 
 	gin.SetMode(gin.TestMode)
@@ -330,7 +333,7 @@ func TestM1_AccountLifecycle_EndToEnd(t *testing.T) {
 		t.Fatalf("expected 200 for refresh token, got %d: %s", w.Code, w.Body.String())
 	}
 	var rotResp struct {
-		Data TokenPair `json:"data"`
+		Data serviceaccount.TokenPair `json:"data"`
 	}
 	parseJSONResponse(t, w, &rotResp)
 	newAccessToken := rotResp.Data.AccessToken

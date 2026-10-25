@@ -2,6 +2,9 @@ package account
 
 import (
 	"time"
+
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
+	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 )
 
 // RegisterRequest represents the JSON payload for registration.
@@ -43,14 +46,14 @@ type UserStats struct {
 
 // UserProfileResponse represents the private, full profile for the authenticated user (/users/me).
 type UserProfileResponse struct {
-	ID        int64      `json:"id"`
-	Username  string     `json:"username"`
-	Nickname  string     `json:"nickname"`
-	AvatarURL string     `json:"avatar_url"`
-	Bio       string     `json:"bio"`
-	Status    UserStatus `json:"status"`
-	CreatedAt time.Time  `json:"created_at"`
-	Stats     UserStats  `json:"stats"`
+	ID        int64                    `json:"id"`
+	Username  string                   `json:"username"`
+	Nickname  string                   `json:"nickname"`
+	AvatarURL string                   `json:"avatar_url"`
+	Bio       string                   `json:"bio"`
+	Status    domainaccount.UserStatus `json:"status"`
+	CreatedAt time.Time                `json:"created_at"`
+	Stats     UserStats                `json:"stats"`
 }
 
 // PublicUserProfileResponse represents public profile visible to any user (/users/:userId).
@@ -65,12 +68,12 @@ type PublicUserProfileResponse struct {
 
 // LoginResponse represents the login payload containing tokens and user profile.
 type LoginResponse struct {
-	Tokens TokenPair           `json:"tokens"`
-	User   UserProfileResponse `json:"user"`
+	Tokens serviceaccount.TokenPair `json:"tokens"`
+	User   UserProfileResponse      `json:"user"`
 }
 
 // ToUserProfileResponse converts an internal User entity to UserProfileResponse.
-func ToUserProfileResponse(u *User) UserProfileResponse {
+func ToUserProfileResponse(u *domainaccount.User) UserProfileResponse {
 	return UserProfileResponse{
 		ID:        u.ID,
 		Username:  u.Username,
@@ -84,7 +87,7 @@ func ToUserProfileResponse(u *User) UserProfileResponse {
 }
 
 // ToPublicUserProfileResponse converts an internal User entity to PublicUserProfileResponse.
-func ToPublicUserProfileResponse(u *User) PublicUserProfileResponse {
+func ToPublicUserProfileResponse(u *domainaccount.User) PublicUserProfileResponse {
 	return PublicUserProfileResponse{
 		ID:        u.ID,
 		Nickname:  u.Nickname,

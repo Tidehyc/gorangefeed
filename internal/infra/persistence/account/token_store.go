@@ -2,41 +2,19 @@ package account
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/redis/go-redis/v9"
 )
-
-type RotationResult int
-
-const (
-	RotationOK RotationResult = 1
-	RotationSessionNotFound RotationResult = 0
-	RotationReplayDetected RotationResult = -1
-)
-
-var (
-	ErrSessionNotFound = errors.New("refresh session not found or expired")
-	ErrReplayDetected  = errors.New("token replay detected: session revoked")
-)
-
-// TokenStore defines the storage contract for JWT sessions, rotations, and blacklists.
-type TokenStore interface {
-	CreateSession(ctx context.Context, sessionID, tokenID string, ttl time.Duration) error
-	RotateSession(ctx context.Context, sessionID, oldTokenID, newTokenID string, ttl time.Duration) (RotationResult, error)
-	RevokeSession(ctx context.Context, sessionID string) error
-	BlacklistAccessToken(ctx context.Context, tokenID string, ttl time.Duration) error
-	IsAccessTokenBlacklisted(ctx context.Context, tokenID string) (bool, error)
-}
 
 type redisTokenStore struct {
 	client *redis.Client
 }
 
-// NewTokenStore constructs a Redis-backed TokenStore.
-func NewTokenStore(client *redis.Client) TokenStore {
+// NewTokenStore constructs a Redis-backed TokenStore implementing domainaccount.TokenStore.
+func NewTokenStore(client *redis.Client) domainaccount.TokenStore {
 	return &redisTokenStore{client: client}
 }
 
@@ -77,7 +55,7 @@ else
 end
 `)
 
-func (s *redisTokenStore) RotateSession(ctx context.Context, sessionID, oldTokenID, newTokenID string, ttl time.Duration) (RotationResult, error) {
+func (s *redisTokenStore) RotateSession(ctx context.Context, sessionID, oldTokenID, newTokenID string, ttl time.Duration) (domainaccount.RotationResult, error) {
 	key := sessionKey(sessionID)
 	ttlSec := int(ttl.Seconds())
 	if ttlSec <= 0 {
@@ -89,7 +67,7 @@ func (s *redisTokenStore) RotateSession(ctx context.Context, sessionID, oldToken
 		return 0, fmt.Errorf("run rotate lua script error: %w", err)
 	}
 
-	return RotationResult(res), nil
+	return domainaccount.RotationResult(res), nil
 }
 
 func (s *redisTokenStore) RevokeSession(ctx context.Context, sessionID string) error {

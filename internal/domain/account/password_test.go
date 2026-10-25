@@ -12,11 +12,11 @@ func TestValidateUsername(t *testing.T) {
 		{"alice", false},
 		{"alice_123", false},
 		{"User_999", false},
-		{"ab", true},                                 // too short
+		{"ab", true},                                         // too short
 		{"a_very_long_username_that_exceeds_32_chars", true}, // too long
-		{"alice with space", true},                  // space
-		{"alice@domain", true},                      // special char
-		{"", true},                                  // empty
+		{"alice with space", true},                           // space
+		{"alice@domain", true},                               // special char
+		{"", true},                                           // empty
 	}
 
 	for _, tt := range tests {

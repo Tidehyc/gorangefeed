@@ -5,22 +5,24 @@ import (
 	"strconv"
 	"strings"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/middleware"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
+	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	"github.com/gin-gonic/gin"
 )
 
 // Handler handles HTTP requests for the account domain.
 type Handler struct {
-	svc           Service
+	svc           serviceaccount.Service
 	jwtMgr        *jwt.TokenManager
 	avatarStorage *storage.AvatarStorage
 }
 
 // NewHandler creates a new account Handler.
-func NewHandler(svc Service, jwtMgr *jwt.TokenManager, avatarStorage *storage.AvatarStorage) *Handler {
+func NewHandler(svc serviceaccount.Service, jwtMgr *jwt.TokenManager, avatarStorage *storage.AvatarStorage) *Handler {
 	return &Handler{
 		svc:           svc,
 		jwtMgr:        jwtMgr,
@@ -204,7 +206,7 @@ func (h *Handler) GetPublicProfile(c *gin.Context) {
 		return
 	}
 
-	if user.Status != UserStatusActive {
+	if user.Status != domainaccount.UserStatusActive {
 		response.Fail(c, response.ErrNotFound("User not found"))
 		return
 	}
