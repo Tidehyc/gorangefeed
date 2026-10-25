@@ -97,3 +97,12 @@ func NewRouter(deps DependencyChecks) *gin.Engine {
 
 	return r
 }
+
+// MountMediaRoutes mounts the media uploads directory to the /media route,
+// providing HTTP 206 Range support and disabling directory browsing.
+func MountMediaRoutes(r *gin.Engine, mediaDir string) {
+	if mediaDir == "" {
+		mediaDir = "uploads"
+	}
+	r.Static("/media", mediaDir)
+}

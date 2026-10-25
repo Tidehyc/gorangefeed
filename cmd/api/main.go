@@ -12,12 +12,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Tidehyc/gorangefeed/internal/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
+	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
+	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 )
 
 func main() {
@@ -58,7 +61,20 @@ func main() {
 	}
 	l.Info("connected to RabbitMQ", "host", cfg.RabbitMQ.Host, "port", cfg.RabbitMQ.Port)
 
-	// 4. Construct Router with probe checks
+	// 4. Assemble Account Domain & Storage
+	avatarStorage, err := storage.NewAvatarStorage("uploads")
+	if err != nil {
+		l.Error("failed to initialize avatar storage", "error", err)
+		os.Exit(1)
+	}
+
+	accountRepo := account.NewRepository(db)
+	tokenStore := account.NewTokenStore(rdb)
+	jwtMgr := jwt.NewTokenManager(cfg.JWT)
+	accountSvc := account.NewService(accountRepo, tokenStore, jwtMgr, cfg.JWT)
+	accountHandler := account.NewHandler(accountSvc, jwtMgr, avatarStorage)
+
+	// 5. Construct Router with probe checks
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error {
 			return mysql.Ping(ctx, db)
@@ -70,6 +86,10 @@ func main() {
 			return rabbitmq.Ping(mqConn)
 		},
 	})
+
+	// Mount media static route and account domain routes
+	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
+	account.RegisterRoutes(engine, accountHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

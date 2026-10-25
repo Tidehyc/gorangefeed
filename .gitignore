@@ -37,9 +37,9 @@ coverage.out
 .gemini/
 
 # Local media, uploads and runtime data
-storage/
-uploads/
-media/
-tmp/
+/storage/
+/uploads/
+/media/
+/tmp/
 *.log
 logs/
