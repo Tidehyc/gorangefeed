@@ -11,9 +11,17 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
+// DefaultMigrationsTable is the default schema migrations table name.
+const DefaultMigrationsTable = "schema_migrations"
+
 // RunUp executes all pending migrations up to the latest version.
 func RunUp(dsn string, migrationsPath string) (uint, bool, error) {
-	m, err := newMigrate(dsn, migrationsPath)
+	return RunUpWithTable(dsn, migrationsPath, DefaultMigrationsTable)
+}
+
+// RunUpWithTable executes all pending migrations up to the latest version using the specified table.
+func RunUpWithTable(dsn string, migrationsPath string, table string) (uint, bool, error) {
+	m, err := newMigrate(dsn, migrationsPath, table)
 	if err != nil {
 		return 0, false, err
 	}
@@ -32,7 +40,12 @@ func RunUp(dsn string, migrationsPath string) (uint, bool, error) {
 
 // RunDown rolls back one migration step.
 func RunDown(dsn string, migrationsPath string) (uint, bool, error) {
-	m, err := newMigrate(dsn, migrationsPath)
+	return RunDownWithTable(dsn, migrationsPath, DefaultMigrationsTable)
+}
+
+// RunDownWithTable rolls back one migration step using the specified table.
+func RunDownWithTable(dsn string, migrationsPath string, table string) (uint, bool, error) {
+	m, err := newMigrate(dsn, migrationsPath, table)
 	if err != nil {
 		return 0, false, err
 	}
@@ -51,7 +64,12 @@ func RunDown(dsn string, migrationsPath string) (uint, bool, error) {
 
 // Version returns the current migration version and dirty status.
 func Version(dsn string, migrationsPath string) (uint, bool, error) {
-	m, err := newMigrate(dsn, migrationsPath)
+	return VersionWithTable(dsn, migrationsPath, DefaultMigrationsTable)
+}
+
+// VersionWithTable returns the current migration version and dirty status using the specified table.
+func VersionWithTable(dsn string, migrationsPath string, table string) (uint, bool, error) {
+	m, err := newMigrate(dsn, migrationsPath, table)
 	if err != nil {
 		return 0, false, err
 	}
@@ -66,7 +84,12 @@ func Version(dsn string, migrationsPath string) (uint, bool, error) {
 
 // Force sets the migration version and clears dirty status.
 func Force(dsn string, migrationsPath string, version int) error {
-	m, err := newMigrate(dsn, migrationsPath)
+	return ForceWithTable(dsn, migrationsPath, version, DefaultMigrationsTable)
+}
+
+// ForceWithTable sets the migration version and clears dirty status using the specified table.
+func ForceWithTable(dsn string, migrationsPath string, version int, table string) error {
+	m, err := newMigrate(dsn, migrationsPath, table)
 	if err != nil {
 		return err
 	}
@@ -78,14 +101,17 @@ func Force(dsn string, migrationsPath string, version int) error {
 	return nil
 }
 
-func newMigrate(dsn string, migrationsPath string) (*migrate.Migrate, error) {
+func newMigrate(dsn string, migrationsPath string, table string) (*migrate.Migrate, error) {
+	if table == "" {
+		table = DefaultMigrationsTable
+	}
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open mysql: %w", err)
 	}
 
 	driver, err := mysql.WithInstance(db, &mysql.Config{
-		MigrationsTable: "schema_migrations",
+		MigrationsTable: table,
 	})
 	if err != nil {
 		_ = db.Close()

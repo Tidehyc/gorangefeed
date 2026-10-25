@@ -27,6 +27,13 @@ func TestMigration_VersionAdvanceAndDirtyManagement(t *testing.T) {
 		t.Skipf("skipping migration test: MySQL not reachable (%v)", err)
 	}
 
+	const testTable = "schema_migrations_test"
+	cleanup := func() {
+		_, _ = probeDB.Exec("DROP TABLE IF EXISTS " + testTable)
+	}
+	cleanup()
+	defer cleanup()
+
 	// Create temporary migration files for this isolated test
 	tmpDir := t.TempDir()
 	upContent := "SELECT 1;"
@@ -40,17 +47,17 @@ func TestMigration_VersionAdvanceAndDirtyManagement(t *testing.T) {
 	}
 
 	// 1. Force to clean baseline (version 1)
-	if err := Force(dsn, tmpDir, 1); err != nil {
+	if err := ForceWithTable(dsn, tmpDir, 1, testTable); err != nil {
 		t.Fatalf("force version failed: %v", err)
 	}
 
-	ver, dirty, err := Version(dsn, tmpDir)
+	ver, dirty, err := VersionWithTable(dsn, tmpDir, testTable)
 	if err != nil || ver != 1 || dirty {
 		t.Fatalf("expected version 1 dirty=false after force, got ver=%d dirty=%v err=%v", ver, dirty, err)
 	}
 
 	// 2. Test RunDown: rolls back step
-	ver, dirty, err = RunDown(dsn, tmpDir)
+	ver, dirty, err = RunDownWithTable(dsn, tmpDir, testTable)
 	if err != nil {
 		t.Fatalf("run down failed: %v", err)
 	}
@@ -59,7 +66,7 @@ func TestMigration_VersionAdvanceAndDirtyManagement(t *testing.T) {
 	}
 
 	// 3. Test RunUp: advances version
-	ver, dirty, err = RunUp(dsn, tmpDir)
+	ver, dirty, err = RunUpWithTable(dsn, tmpDir, testTable)
 	if err != nil {
 		t.Fatalf("run up failed: %v", err)
 	}
