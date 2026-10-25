@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M1 账号、双 Token 与安全中间件（已完成） + 架构重构 & 测试分流规范化（已完成）** |
-| **完成进度** | M1 阶段：11 / 11 项（100%） · 架构重构与测试独立：100% · 全模块骨架搭建：100% |
-| **进行中任务** | 基础架构重构（整洁架构 Domain/Service/HTTP/Persistence）、测试分流（`/test/e2e`）及 M0~M5 全模块目录树搭建已验收完成并通过 CI 全量验证 |
+| **当前阶段** | **M2 视频单文件上传与流式发布（骨架已确立，待开始实施）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：0 / 9 项（0%） |
+| **进行中任务** | M2 视频骨架与任务明细拆解确立；准备开启 M2-01 视频主表与统计表迁移 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 待用户确认后开启 M2：视频单文件上传与流式发布（HTTP 206 Range） |
+| **下一步行动** | 编写数据库迁移脚本 `000003_create_videos_table`，完成 `videos` 与 `video_stats` 数据表结构迁移 |
 
 ---
 
@@ -34,7 +34,7 @@
 |---|---|---|---|---|
 | **M0** | 工程骨架与基础设施装配 | NFR-MAINT-*, NFR-OBS-01 | `DONE` | `go vet` + `go test` 绿灯；`docker compose` 一键启动；`/readyz` 正确反映依赖状态，`/metrics` 输出标准指标 |
 | **M1** | 账号、双 Token 与安全中间件 | FR-ACC-01~06, NFR-SEC-07 | `DONE` | 登录、刷新、登出及旧 Token 撤销全流程通过；软鉴权与频控限流测试通过 |
-| **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `TODO` | `e2e.sh` 跑通上传、发布与详情；视频路由支持 HTTP 206 Range 分段请求；`videos` 与 `video_stats` 数据一致 |
+| **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `DOING`| `e2e.sh` / E2E 单测跑通上传、发布、详情与下架；视频路由支持 HTTP 206 Range 分段请求；`videos` 与 `video_stats` 事务一致 |
 | **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `TODO` | 200MB 文件断网 3 次重试续传成功；MySQL 位图权威状态保证无并发覆盖 |
 | **M3** | 全局最新 Feed 流 | FR-FEED-01, 03, 04 | `TODO` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确 |
 | **M4** | 互动、推拉关注流与 Outbox 派生 | FR-INT-*, FR-REL-*, FR-FEED-02 | `TODO` | 高并发点赞计数不丢；评论支持 `idempotency_key` 幂等防重放；关注流推拉合并正确；Outbox 租约与死信运转正常 |
@@ -89,9 +89,24 @@
 
 ---
 
-## 六、后续里程碑任务概览
+## 六、M2 视频核心与流式发布任务明细
 
-- **M2 视频核心**：视频与统计表迁移 · 本地存储抽象与 HTTP `/media` 路由（支持 HTTP 206 Range 分段请求） · 上传与 MIME 校验 · 视频发布 · 详情与作者作品流 · 视频下架 · 对应测试。
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M2-01** | 视频主表与统计表迁移脚本 | M0-05 | 编写 `000003_create_videos_table`，垂直拆分 `videos` 与 `video_stats`（隔离高频行锁）；引入 `idempotency_key` 并建立唯一索引 `uk_author_idempotency(author_id, idempotency_key)` 支持发布幂等；建立 `(status, id DESC)`、`(author_id, status, id DESC)` 与 `published_at` 索引；通过 migrate 历史一致性与回滚校验 | `TODO` |
+| **M2-02** | 视频领域模型与仓储契约定义 | — | 在 `internal/domain/video` 定义 `Video`（含状态机：草稿/已发布/已下架）、`VideoStats`、`VideoDetail` 实体；声明 `VideoRepository`（含 `SaveWithStats`、`FindByAuthorAndIdempotencyKey`、`ListByAuthorCursor` 等）接口，定义领域错误常量（如 `ErrVideoNotFound`, `ErrVideoForbidden`, `ErrDuplicateIdempotencyKey`），保持零外部依赖 | `TODO` |
+| **M2-03** | 视频存储管理与 HTTP 206 Range 流媒体服务 | M0-07 | 扩展 `internal/infra/storage` 支持视频本地存储与路径防穿越（UUID 隔离）；在路由层挂载 `/media/videos/*` 静态路由，基于 `http.ServeContent` 原生支持 HTTP 206 Partial Content（支持 Range 请求头、Content-Range、分段传输与 416 越界校验） | `TODO` |
+| **M2-04** | 视频单文件上传与 MIME/MagicNumber 严格校验 | M2-03 | 限制 MP4 格式、大小 ≤200MB（`http.MaxBytesReader` 请求体截断防打满内存）；执行二进制 Magic Number 嗅探（ftyp 标识）与 MIME 双重拦截；**支持异常失败自动清理机制（校验/解析失败即刻删除磁盘残留，杜绝脏文件）** | `TODO` |
+| **M2-05** | 视频仓储与统计持久化实现 | M2-01, M2-02 | 在 `internal/infra/persistence/video` 基于 GORM 实现仓储；单事务原子创建 `videos` 并初始化 `video_stats`（计数全为 0）；实现基于唯一键冲突拦截的发布幂等查询；实现作者作品流单调 ID 游标查询（`id < cursor` 倒序）与状态变更 | `TODO` |
+| **M2-06** | 视频领域 Service 核心业务用例 | M2-02, M2-04, M2-05 | 在 `internal/service/video` 实现视频上传、幂等发布（命中幂等键安全返回原视频）、详情组装（回填统计数据与作者公开资料，下架拦截）、**作者作品流高性能单调 ID 游标分页（杜绝 offset 深分页与并发脏读）**、下架（仅作者可下架，保持操作幂等）；覆盖单元测试与 Mock 测试 | `TODO` |
+| **M2-07** | 视频 HTTP 控制器与输入校验 | M2-06 | 在 `internal/http/video` 暴露上传、发布（支持 `Idempotency-Key` 请求头/参数）、详情（软鉴权兼容游客与登录态）、作者流（游标入参与 `next_cursor` 返回）、下架接口；统一 API Envelope 与规范化错误码；编写 Handler 单元测试 | `TODO` |
+| **M2-08** | 路由挂载与依赖注入装配 | M2-07 | 在 `cmd/api/main.go` 中完成 Repository/Service/Handler 依赖组装；注册 `/api/v1/videos/*` 与 `/api/v1/users/:userId/videos` 路由组，绑定 JWT 鉴权与软鉴权中间件；挂载 `/media/videos/*` 流媒体路由 | `TODO` |
+| **M2-09** | M2 视频全生命周期 E2E 集成测试 | M2-08 | 在 `test/e2e/video_lifecycle_test.go` 中验证上传 → 格式嗅探拦截与脏文件清理 → 事务发布与幂等重放 → HTTP 206 Range 分段流式播放（验证 bytes 0-1023 分段与 Content-Range） → 详情与作者流游标分页 → 越权下架拦截 → 作者本人下架 → 下架后详情 404 的全生命周期自动化验证 | `TODO` |
+
+---
+
+## 七、后续里程碑任务概览
+
 - **M2.5 分片续传**：上传会话表与状态机 · 分片 Init/Upload/Status/Complete · 位图控制（MySQL 权威 + Redis 读加速）· 文件合并并发锁 · 针对性续传测试。
 - **M3 全局 Feed**：DB 基线查询与单调 ID 游标 · Redis ZSet 时间线写入与原子裁剪（Lua）· Floor 计算与冷热拼接 · 下架过滤与游标推进 · 逻辑过期 + Singleflight 页缓存 · 降级策略 · 8 组边界测试。
 - **M4 互动与 Outbox**：点赞/关注表与关系统计 · 点赞事务（`RowsAffected` 驱动）· 评论（基于客户端 `idempotency_key` 唯一键防重放）与关注 · Outbox 表与事务落库 · 租约派发调度器 · 消费端幂等（`consumed_events`）· 关注流推拉结合分发与多路归并 · 对应测试。
