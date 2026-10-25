@@ -15,6 +15,7 @@ import (
 
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
+	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
@@ -49,6 +50,20 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	if err != nil {
 		t.Skipf("skipping E2E test: MySQL not reachable on %s:%d (%v)", cfg.MySQL.Host, cfg.MySQL.Port, err)
 		return nil, "", nil
+	}
+
+	// Ensure database schema is migrated for E2E tests
+	migrationsDir := "../../migrations"
+	if _, err := os.Stat(migrationsDir); err != nil {
+		for _, cand := range []string{"migrations", "../migrations"} {
+			if _, err := os.Stat(cand); err == nil {
+				migrationsDir = cand
+				break
+			}
+		}
+	}
+	if _, _, err := migration.RunUp(cfg.MySQL.DSN(), migrationsDir); err != nil {
+		t.Fatalf("failed to run migrations for E2E test: %v", err)
 	}
 
 	rdb, err := redis.New(&cfg.Redis)
