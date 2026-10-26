@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M2.5 视频分片上传与断点续传（架构骨架规划与任务拆解）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：0 / 7 项（0%） |
-| **进行中任务** | 梳理 M2.5 分片上传与断点续传系统骨架，深入对比参考项目实现，扬长避短确立高并发位图与防重入合并方案，完成 M2.5-01~07 任务规划 |
+| **当前阶段** | **M2.5 视频分片上传与断点续传（核心域、持久化、分片存储与Service用例已完成）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：5 / 7 项（71.4%） |
+| **进行中任务** | 已完成 M2.5-01~05（数据表迁移、领域模型、Redis Bitmap 与分布式合并锁、分片存储引擎与 Service 业务闭环）；准备推进 M2.5-06（HTTP 控制器）与 M2.5-07（E2E 测试） |
 | **阻塞事项** | 无 |
-| **下一步行动** | 待用户确认规划后，启动 M2.5-01（分片会话表迁移）与 M2.5-02（领域模型与聚合根）落地 |
+| **下一步行动** | 实现 `internal/http/upload` 控制器并在 `cmd/api` 完成路由装配，编写 M2.5-07 全生命周期 E2E 集成测试 |
 
 ---
 
@@ -109,11 +109,11 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M2.5-01** | 分片上传会话表迁移与版本管理 | M0-05 | 编写 `000004_create_upload_sessions_table`，定义 `upload_sessions` 权威持久化表（包含 `upload_id` 唯一索引、`(user_id, file_hash)` 断点定位索引、`status` 状态枚举、`total_chunks`、`chunk_size`、`expire_at` 等）；通过 migrate up/down 回滚验证 | `TODO` |
-| **M2.5-02** | 分片上传领域模型与仓储契约定义 | — | 在 `internal/domain/upload` 定义 `UploadSession` 聚合根（包含 `Uploading/Merging/Completed/Expired` 状态机流转与位图计算）、`UploadSessionRepository` 接口及领域错误常量，保持零外部依赖 | `TODO` |
-| **M2.5-03** | 基于 Redis Bitmap 与分布式锁的高并发状态控制 | M0-06 | 在 `internal/infra/persistence/upload` 实现仓储；引入 Redis 原生 `SETBIT` / `BITCOUNT` 彻底解决并发上传切片时的脏写覆盖问题；实现基于 Redis `NX EX` 的分片合并互斥锁，配合 MySQL 状态机 CAS 防重入 | `TODO` |
-| **M2.5-04** | 分片存储管理与原子流式拼接引擎 | M2-03 | 扩展 `internal/infra/storage`，实现切片安全落盘（`uploads/tmp/{upload_id}/{index}` 路径防穿越）、分片 MD5 校验、低内存流式追加拼接；合并完成后严格执行 MP4 Magic Number 二进制嗅探校验，合规即移动至最终路径并安全清理临时分片目录，校验失败即刻回滚清理 | `TODO` |
-| **M2.5-05** | 分片续传领域 Service 核心业务用例 | M2.5-02~04 | 在 `internal/service/upload` 实现 `InitSession`（存在未过期相同文件哈希会话时直接断点恢复）、`UploadChunk`（幂等覆盖已上传切片）、`GetStatus`（返回已完成切片索引清单）、`Complete`（并发防重入校验、流式合并与状态终态流转）；覆盖单测与并发 Mock 测试 | `TODO` |
+| **M2.5-01** | 分片上传会话表迁移与版本管理 | M0-05 | 编写 `000004_create_upload_sessions_table`，定义 `upload_sessions` 权威持久化表（包含 `upload_id` 唯一索引、`(user_id, file_hash)` 断点定位索引、`status` 状态枚举、`total_chunks`、`chunk_size`、`expire_at` 等）；通过 migrate up/down 回滚验证 | `DONE` |
+| **M2.5-02** | 分片上传领域模型与仓储契约定义 | — | 在 `internal/domain/upload` 定义 `UploadSession` 聚合根（包含 `Uploading/Merging/Completed/Expired` 状态机流转与位图计算）、`UploadSessionRepository` 接口及领域错误常量，保持零外部依赖 | `DONE` |
+| **M2.5-03** | 基于 Redis Bitmap 与分布式锁的高并发状态控制 | M0-06 | 在 `internal/infra/persistence/upload` 实现仓储；引入 Redis 原生 `SETBIT` / `BITCOUNT` 彻底解决并发上传切片时的脏写覆盖问题；实现基于 Redis `NX EX` 的分片合并互斥锁，配合 MySQL 状态机 CAS 防重入 | `DONE` |
+| **M2.5-04** | 分片存储管理与原子流式拼接引擎 | M2-03 | 扩展 `internal/infra/storage`，实现切片安全落盘（`uploads/tmp/{upload_id}/{index}` 路径防穿越）、分片 MD5 校验、低内存流式追加拼接；合并完成后严格执行 MP4 Magic Number 二进制嗅探校验，合规即移动至最终路径并安全清理临时分片目录，校验失败即刻回滚清理 | `DONE` |
+| **M2.5-05** | 分片续传领域 Service 核心业务用例 | M2.5-02~04 | 在 `internal/service/upload` 实现 `InitSession`（存在未过期相同文件哈希会话时直接断点恢复）、`UploadChunk`（幂等覆盖已上传切片）、`GetStatus`（返回已完成切片索引清单）、`Complete`（并发防重入校验、流式合并与状态终态流转）；覆盖单测与并发 Mock 测试 | `DONE` |
 | **M2.5-06** | 分片续传 HTTP 控制器与路由装配 | M2.5-05 | 在 `internal/http/upload` 暴露 `/api/v1/videos/chunk/init`、`upload`、`status`、`complete` 接口；绑定 JWT 认证；统一 API 响应信封；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `TODO` |
 | **M2.5-07** | M2.5 分片断点续传全生命周期 E2E 集成测试 | M2.5-06 | 在 `test/e2e/chunk_upload_test.go` 中验证会话初始化 → 模拟断网（仅传部分切片） → 再次 Init/Status 断点恢复 → 多切片并发上传（验证位图并发安全性） → 重复分片上传幂等性 → 并发 Complete 合并防重入拦截 → 合成视频 HTTP 206 流式点播验证 → 伪造非法切片合并失败自动清理全链路 | `TODO` |
 
