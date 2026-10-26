@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M2 视频单文件上传与流式发布（骨架已确立，待开始实施）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：0 / 9 项（0%） |
-| **进行中任务** | M2 视频骨架与任务明细拆解确立；准备开启 M2-01 视频主表与统计表迁移 |
+| **当前阶段** | **M2 视频单文件上传与流式发布（领域基石与核心用例已完成）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：4 / 9 项（44.4%） |
+| **进行中任务** | 视频数据迁移、领域模型、持久化仓储与 Service 核心用例已全量通过测试；准备开启 M2-03/M2-04 视频存储、HTTP 206 流媒体及上传校验 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 编写数据库迁移脚本 `000003_create_videos_table`，完成 `videos` 与 `video_stats` 数据表结构迁移 |
+| **下一步行动** | 推进 M2-03 与 M2-04，实现本地存储防穿越、HTTP 206 Range 分段流式传输及 MP4 MagicNumber 安全校验 |
 
 ---
 
@@ -93,12 +93,12 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M2-01** | 视频主表与统计表迁移脚本 | M0-05 | 编写 `000003_create_videos_table`，垂直拆分 `videos` 与 `video_stats`（隔离高频行锁）；引入 `idempotency_key` 并建立唯一索引 `uk_author_idempotency(author_id, idempotency_key)` 支持发布幂等；建立 `(status, id DESC)`、`(author_id, status, id DESC)` 与 `published_at` 索引；通过 migrate 历史一致性与回滚校验 | `TODO` |
-| **M2-02** | 视频领域模型与仓储契约定义 | — | 在 `internal/domain/video` 定义 `Video`（含状态机：草稿/已发布/已下架）、`VideoStats`、`VideoDetail` 实体；声明 `VideoRepository`（含 `SaveWithStats`、`FindByAuthorAndIdempotencyKey`、`ListByAuthorCursor` 等）接口，定义领域错误常量（如 `ErrVideoNotFound`, `ErrVideoForbidden`, `ErrDuplicateIdempotencyKey`），保持零外部依赖 | `TODO` |
+| **M2-01** | 视频主表与统计表迁移脚本 | M0-05 | 编写 `000003_create_videos_table`，垂直拆分 `videos` 与 `video_stats`（隔离高频行锁）；引入 `idempotency_key` 并建立唯一索引 `uk_author_idempotency(author_id, idempotency_key)` 支持发布幂等；建立 `(status, id DESC)`、`(author_id, status, id DESC)` 与 `published_at` 索引；通过 migrate 历史一致性与回滚校验 | `DONE` |
+| **M2-02** | 视频领域模型与仓储契约定义 | — | 在 `internal/domain/video` 定义 `Video`（含状态机：草稿/已发布/已下架）、`VideoStats`、`VideoDetail` 实体；声明 `VideoRepository`（含 `SaveWithStats`、`FindByAuthorAndIdempotencyKey`、`ListByAuthorCursor` 等）接口，定义领域错误常量（如 `ErrVideoNotFound`, `ErrVideoForbidden`, `ErrDuplicateIdempotencyKey`），保持零外部依赖 | `DONE` |
 | **M2-03** | 视频存储管理与 HTTP 206 Range 流媒体服务 | M0-07 | 扩展 `internal/infra/storage` 支持视频本地存储与路径防穿越（UUID 隔离）；在路由层挂载 `/media/videos/*` 静态路由，基于 `http.ServeContent` 原生支持 HTTP 206 Partial Content（支持 Range 请求头、Content-Range、分段传输与 416 越界校验） | `TODO` |
 | **M2-04** | 视频单文件上传与 MIME/MagicNumber 严格校验 | M2-03 | 限制 MP4 格式、大小 ≤200MB（`http.MaxBytesReader` 请求体截断防打满内存）；执行二进制 Magic Number 嗅探（ftyp 标识）与 MIME 双重拦截；**支持异常失败自动清理机制（校验/解析失败即刻删除磁盘残留，杜绝脏文件）** | `TODO` |
-| **M2-05** | 视频仓储与统计持久化实现 | M2-01, M2-02 | 在 `internal/infra/persistence/video` 基于 GORM 实现仓储；单事务原子创建 `videos` 并初始化 `video_stats`（计数全为 0）；实现基于唯一键冲突拦截的发布幂等查询；实现作者作品流单调 ID 游标查询（`id < cursor` 倒序）与状态变更 | `TODO` |
-| **M2-06** | 视频领域 Service 核心业务用例 | M2-02, M2-04, M2-05 | 在 `internal/service/video` 实现视频上传、幂等发布（命中幂等键安全返回原视频）、详情组装（回填统计数据与作者公开资料，下架拦截）、**作者作品流高性能单调 ID 游标分页（杜绝 offset 深分页与并发脏读）**、下架（仅作者可下架，保持操作幂等）；覆盖单元测试与 Mock 测试 | `TODO` |
+| **M2-05** | 视频仓储与统计持久化实现 | M2-01, M2-02 | 在 `internal/infra/persistence/video` 基于 GORM 实现仓储；单事务原子创建 `videos` 并初始化 `video_stats`（计数全为 0）；实现基于唯一键冲突拦截的发布幂等查询；实现作者作品流单调 ID 游标查询（`id < cursor` 倒序）与状态变更 | `DONE` |
+| **M2-06** | 视频领域 Service 核心业务用例 | M2-02, M2-04, M2-05 | 在 `internal/service/video` 实现视频上传、幂等发布（命中幂等键安全返回原视频）、详情组装（回填统计数据与作者公开资料，下架拦截）、**作者作品流高性能单调 ID 游标分页（杜绝 offset 深分页与并发脏读）**、下架（仅作者可下架，保持操作幂等）；覆盖单元测试与 Mock 测试 | `DONE` |
 | **M2-07** | 视频 HTTP 控制器与输入校验 | M2-06 | 在 `internal/http/video` 暴露上传、发布（支持 `Idempotency-Key` 请求头/参数）、详情（软鉴权兼容游客与登录态）、作者流（游标入参与 `next_cursor` 返回）、下架接口；统一 API Envelope 与规范化错误码；编写 Handler 单元测试 | `TODO` |
 | **M2-08** | 路由挂载与依赖注入装配 | M2-07 | 在 `cmd/api/main.go` 中完成 Repository/Service/Handler 依赖组装；注册 `/api/v1/videos/*` 与 `/api/v1/users/:userId/videos` 路由组，绑定 JWT 鉴权与软鉴权中间件；挂载 `/media/videos/*` 流媒体路由 | `TODO` |
 | **M2-09** | M2 视频全生命周期 E2E 集成测试 | M2-08 | 在 `test/e2e/video_lifecycle_test.go` 中验证上传 → 格式嗅探拦截与脏文件清理 → 事务发布与幂等重放 → HTTP 206 Range 分段流式播放（验证 bytes 0-1023 分段与 Content-Range） → 详情与作者流游标分页 → 越权下架拦截 → 作者本人下架 → 下架后详情 404 的全生命周期自动化验证 | `TODO` |

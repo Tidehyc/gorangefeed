@@ -105,6 +105,16 @@ func newMigrate(dsn string, migrationsPath string, table string) (*migrate.Migra
 	if table == "" {
 		table = DefaultMigrationsTable
 	}
+
+	// golang-migrate requires multiStatements=true to execute multi-statement SQL migration files
+	if !strings.Contains(dsn, "multiStatements=") {
+		if strings.Contains(dsn, "?") {
+			dsn += "&multiStatements=true"
+		} else {
+			dsn += "?multiStatements=true"
+		}
+	}
+
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open mysql: %w", err)
