@@ -13,16 +13,19 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 )
 
 func main() {
@@ -76,7 +79,17 @@ func main() {
 	accountSvc := serviceaccount.NewService(accountRepo, tokenStore, jwtMgr, cfg.JWT)
 	accountHandler := httpaccount.NewHandler(accountSvc, jwtMgr, avatarStorage)
 
-	// 5. Construct Router with probe checks
+	// 5. Assemble Video Domain & Storage
+	videoStorage, err := storage.NewVideoStorage("uploads")
+	if err != nil {
+		l.Error("failed to initialize video storage", "error", err)
+		os.Exit(1)
+	}
+	videoRepo := persistencevideo.NewRepository(db)
+	videoSvc := servicevideo.NewService(videoRepo, accountRepo)
+	videoHandler := httpvideo.NewHandler(videoSvc, videoStorage)
+
+	// 6. Construct Router with probe checks
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error {
 			return mysql.Ping(ctx, db)
@@ -89,9 +102,10 @@ func main() {
 		},
 	})
 
-	// Mount media static route and account domain routes
+	// Mount media static route and domain routes
 	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
 	httpaccount.RegisterRoutes(engine, accountHandler, jwtMgr, tokenStore, rdb)
+	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
