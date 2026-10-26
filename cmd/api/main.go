@@ -13,18 +13,21 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 )
 
@@ -89,7 +92,19 @@ func main() {
 	videoSvc := servicevideo.NewService(videoRepo, accountRepo)
 	videoHandler := httpvideo.NewHandler(videoSvc, videoStorage)
 
-	// 6. Construct Router with probe checks
+	// 6. Assemble Chunked Upload Domain & Storage
+	chunkStorage, err := storage.NewChunkStorage("uploads")
+	if err != nil {
+		l.Error("failed to initialize chunk storage", "error", err)
+		os.Exit(1)
+	}
+	uploadSessionRepo := persistenceupload.NewSessionRepository(db)
+	uploadBitmapStore := persistenceupload.NewBitmapStore(rdb)
+	uploadMergeLocker := persistenceupload.NewMergeLocker(rdb)
+	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
+	uploadHandler := httpupload.NewHandler(uploadSvc)
+
+	// 7. Construct Router with probe checks
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error {
 			return mysql.Ping(ctx, db)
@@ -106,6 +121,7 @@ func main() {
 	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
 	httpaccount.RegisterRoutes(engine, accountHandler, jwtMgr, tokenStore, rdb)
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
+	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

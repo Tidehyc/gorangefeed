@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M2.5 视频分片上传与断点续传（核心域、持久化、分片存储与Service用例已完成）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：5 / 7 项（71.4%） |
-| **进行中任务** | 已完成 M2.5-01~05（数据表迁移、领域模型、Redis Bitmap 与分布式合并锁、分片存储引擎与 Service 业务闭环）；准备推进 M2.5-06（HTTP 控制器）与 M2.5-07（E2E 测试） |
+| **当前阶段** | **M2.5 视频分片上传与断点续传已全量完成（全链路 E2E 验收通过）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） |
+| **进行中任务** | M2.5 所有 7 项任务（含数据表迁移、领域模型、Redis Bitmap 与分布式合并锁、分片存储引擎、Service 业务闭环、HTTP 控制器与全生命周期 E2E 验证）已全部验收通过；准备进入 M3 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 实现 `internal/http/upload` 控制器并在 `cmd/api` 完成路由装配，编写 M2.5-07 全生命周期 E2E 集成测试 |
+| **下一步行动** | 开启 M3 全局最新 Feed 流设计与实现（单调 ID 游标翻页、Redis ZSet 时间线与原子裁剪、冷热拼接与降级） |
 
 ---
 
@@ -35,7 +35,7 @@
 | **M0** | 工程骨架与基础设施装配 | NFR-MAINT-*, NFR-OBS-01 | `DONE` | `go vet` + `go test` 绿灯；`docker compose` 一键启动；`/readyz` 正确反映依赖状态，`/metrics` 输出标准指标 |
 | **M1** | 账号、双 Token 与安全中间件 | FR-ACC-01~06, NFR-SEC-07 | `DONE` | 登录、刷新、登出及旧 Token 撤销全流程通过；软鉴权与频控限流测试通过 |
 | **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `DONE` | E2E 单测跑通上传、发布、206 Range 分段点播、详情、游标分页与下架；`videos` 与 `video_stats` 事务一致 |
-| **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `DOING`| 200MB 文件断网重试续传成功；基于 Redis Bitmap 与分布式锁杜绝并发脏写与重复合并；MySQL 权威状态机保证一致性 |
+| **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `DONE` | 200MB 文件断网重试续传成功；基于 Redis Bitmap 与分布式锁杜绝并发脏写与重复合并；MySQL 权威状态机保证一致性 |
 | **M3** | 全局最新 Feed 流 | FR-FEED-01, 03, 04 | `TODO` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确 |
 | **M4** | 互动、推拉关注流与 Outbox 派生 | FR-INT-*, FR-REL-*, FR-FEED-02 | `TODO` | 高并发点赞计数不丢；评论支持 `idempotency_key` 幂等防重放；关注流推拉合并正确；Outbox 租约与死信运转正常 |
 | **M5** | 系统通知与单实例 SSE | FR-NOT-01~05 | `TODO` | 点赞后通知 P99 < 1s 异步落库；SSE 在线推送与断线补拉验证完整 |
@@ -114,8 +114,8 @@
 | **M2.5-03** | 基于 Redis Bitmap 与分布式锁的高并发状态控制 | M0-06 | 在 `internal/infra/persistence/upload` 实现仓储；引入 Redis 原生 `SETBIT` / `BITCOUNT` 彻底解决并发上传切片时的脏写覆盖问题；实现基于 Redis `NX EX` 的分片合并互斥锁，配合 MySQL 状态机 CAS 防重入 | `DONE` |
 | **M2.5-04** | 分片存储管理与原子流式拼接引擎 | M2-03 | 扩展 `internal/infra/storage`，实现切片安全落盘（`uploads/tmp/{upload_id}/{index}` 路径防穿越）、分片 MD5 校验、低内存流式追加拼接；合并完成后严格执行 MP4 Magic Number 二进制嗅探校验，合规即移动至最终路径并安全清理临时分片目录，校验失败即刻回滚清理 | `DONE` |
 | **M2.5-05** | 分片续传领域 Service 核心业务用例 | M2.5-02~04 | 在 `internal/service/upload` 实现 `InitSession`（存在未过期相同文件哈希会话时直接断点恢复）、`UploadChunk`（幂等覆盖已上传切片）、`GetStatus`（返回已完成切片索引清单）、`Complete`（并发防重入校验、流式合并与状态终态流转）；覆盖单测与并发 Mock 测试 | `DONE` |
-| **M2.5-06** | 分片续传 HTTP 控制器与路由装配 | M2.5-05 | 在 `internal/http/upload` 暴露 `/api/v1/videos/chunk/init`、`upload`、`status`、`complete` 接口；绑定 JWT 认证；统一 API 响应信封；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `TODO` |
-| **M2.5-07** | M2.5 分片断点续传全生命周期 E2E 集成测试 | M2.5-06 | 在 `test/e2e/chunk_upload_test.go` 中验证会话初始化 → 模拟断网（仅传部分切片） → 再次 Init/Status 断点恢复 → 多切片并发上传（验证位图并发安全性） → 重复分片上传幂等性 → 并发 Complete 合并防重入拦截 → 合成视频 HTTP 206 流式点播验证 → 伪造非法切片合并失败自动清理全链路 | `TODO` |
+| **M2.5-06** | 分片续传 HTTP 控制器与路由装配 | M2.5-05 | 在 `internal/http/upload` 暴露 `/api/v1/videos/chunk/init`、`upload`、`status`、`complete` 接口；绑定 JWT 认证；统一 API 响应信封；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `DONE` |
+| **M2.5-07** | M2.5 分片断点续传全生命周期 E2E 集成测试 | M2.5-06 | 在 `test/e2e/chunk_upload_test.go` 中验证会话初始化 → 模拟断网（仅传部分切片） → 再次 Init/Status 断点恢复 → 多切片并发上传（验证位图并发安全性） → 重复分片上传幂等性 → 并发 Complete 合并防重入拦截 → 合成视频 HTTP 206 流式点播验证 → 伪造非法切片合并失败自动清理全链路 | `DONE` |
 
 ---
 

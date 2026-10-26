@@ -14,18 +14,21 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 	"github.com/gin-gonic/gin"
 )
@@ -103,6 +106,16 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	videoSvc := servicevideo.NewService(videoRepo, repo)
 	videoHandler := httpvideo.NewHandler(videoSvc, videoStorage)
 
+	chunkStorage, err := storage.NewChunkStorage(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create chunk storage: %v", err)
+	}
+	uploadSessionRepo := persistenceupload.NewSessionRepository(db)
+	uploadBitmapStore := persistenceupload.NewBitmapStore(rdb)
+	uploadMergeLocker := persistenceupload.NewMergeLocker(rdb)
+	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
+	uploadHandler := httpupload.NewHandler(uploadSvc)
+
 	gin.SetMode(gin.TestMode)
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error { return mysql.Ping(ctx, db) },
@@ -112,6 +125,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
 	httpaccount.RegisterRoutes(engine, handler, jwtMgr, tokenStore, rdb)
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
+	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
 
 	cleanup := func() {
 		_ = os.RemoveAll(tempDir)
