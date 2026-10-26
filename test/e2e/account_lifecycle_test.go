@@ -14,16 +14,19 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 	"github.com/gin-gonic/gin"
 )
 
@@ -92,6 +95,14 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	svc := serviceaccount.NewService(repo, tokenStore, jwtMgr, cfg.JWT)
 	handler := httpaccount.NewHandler(svc, jwtMgr, avatarStorage)
 
+	videoStorage, err := storage.NewVideoStorage(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create video storage: %v", err)
+	}
+	videoRepo := persistencevideo.NewRepository(db)
+	videoSvc := servicevideo.NewService(videoRepo, repo)
+	videoHandler := httpvideo.NewHandler(videoSvc, videoStorage)
+
 	gin.SetMode(gin.TestMode)
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error { return mysql.Ping(ctx, db) },
@@ -100,6 +111,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 
 	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
 	httpaccount.RegisterRoutes(engine, handler, jwtMgr, tokenStore, rdb)
+	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 
 	cleanup := func() {
 		_ = os.RemoveAll(tempDir)

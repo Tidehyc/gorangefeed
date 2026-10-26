@@ -55,10 +55,6 @@ func NewVideoStorage(baseDir string) (*VideoStorage, error) {
 	return &VideoStorage{baseDir: cleanDir}, nil
 }
 
-// BaseDir returns the root uploads directory.
-func (s *VideoStorage) BaseDir() string {
-	return s.baseDir
-}
 
 // SaveVideo validates and stores an uploaded MP4 video.
 // Returns the relative URL path (e.g. "/media/videos/101/20261026/uuid.mp4") and file size in bytes.
