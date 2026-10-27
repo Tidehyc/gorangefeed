@@ -122,7 +122,11 @@ gorangefeed/
 | **L4 实时计数** | 视频的点赞/评论/播放计数 | String `feed:stat:{videoID}` | 15 s | 变化频繁，短 TTL 缓存，回源 DB |
 | **L5 MySQL** | 权威事实数据 | 表 `videos`, `video_stats` | 持久化 | 兜底与冷数据查询 |
 
-> 注：`{viewer}` 针对匿名用户记录为 `anon`，登录用户记录为 `uid:{id}`，杜绝匿名与个性化流串联。L1 仅缓存 ID 列表，卡片与计数由 L3/L4 组装，避免卡片在多个用户的页缓存中重复冗余。
+> 注：`{viewer}` 当前实现中针对匿名用户记录为 `anon`，登录用户记录为 `uid:{id}`，杜绝匿名与个性化流串联。L1 仅缓存 ID 列表，卡片与计数由 L3/L4 组装，避免卡片在多个用户的页缓存中重复冗余。
+> 
+> **【架构演进规划：全局流 L1 骨架共享与个性化装配两阶段解耦】**
+> - **当前瓶颈**：在全局纯最新流（`scene=global`）中，视频列表本质上是客观时间线。若按 `uid:{id}` 隔离 L1 页缓存，会导致登录用户跨人无法复用缓存，L1 命中率下降且 Redis 键空间膨胀。
+> - **优化方案**：在 M4 互动与个性化阶段，将全局流 L1 Key 统一升级为公共骨架 `feed:page:global:public:{cursor}:{limit}:{rankVersion}`，无论游客还是登录用户全平台共享纯 ID 骨架缓存，跨用户 Singleflight 并发合并生效（命中率 ≥ 99.9%）；个性化互动状态（如 `is_liked`、`is_followed` 以及用户级拉黑过滤）后置到 `hydrateFeedPage` 阶段动态注入装配；真正的私有流（M4 关注流、M4.5 推荐流）再按 `uid` 隔离缓存。
 
 #### 3.1.2 Feed 请求流转逻辑
 ```mermaid
@@ -257,10 +261,27 @@ UPDATE video_stats SET like_count = GREATEST(like_count - 1, 0) WHERE video_id =
 ```
 > **环境依赖约束**：该机制要求 MySQL 连接参数**不得开启 `clientFoundRows=true`**（Go 官方驱动默认关闭），确保无变更更新返回影响行数为 0。
 
-**2. 评论发布幂等性**：
+**2. 评论发布幂等性与层级回复**：
 - 客户端发表评论时生成唯一 UUID `idempotency_key`。
 - `comments` 表通过唯一索引 `UNIQUE (user_id, idempotency_key)` 约束单用户幂等性。
-- 客户端网络抖动重试命中唯一键时，服务端直接加载并返回已创建的评论记录与最新计数，杜绝脏数据。
+- 客户端网络抖动重试命中唯一键时，服务端直接回查并返回已创建的评论记录与最新计数，杜绝脏数据。
+- 支持基于 `parent_id` 的二级单层回复（`parent_id=0` 为根评论，`parent_id>0` 为回复）。
+- 作者删除评论置 `status=2`（软删除），并在单事务中原子递减 `video_stats.comment_count`。
+
+**3. 评论点赞与双模式排序**：
+- 引入独立 `comment_likes (user_id, comment_id)` 表，基于 `RowsAffected == 1` 原子增减 `comments.like_count`。
+- 评论列表支持两种排序模式：
+  - **最新排序（`sort=latest`）**：基于 `(video_id, status, id DESC)` 索引，游标入参为单调递减的 `comment.id`。
+  - **热评排序（`sort=hot`）**：基于 `(video_id, status, like_count DESC, id DESC)` 联合索引，游标采用 `(like_count, id)` 复合游标，确保高赞评论在前且翻页无重无漏。
+
+**4. 我点赞的视频流（My Likes Stream）**：
+- 用户通过 `GET /api/v1/users/me/likes` 查询个人点赞流。
+- 依赖 `likes` 表 `(user_id, id DESC)` 索引实现单调 ID 游标翻页（`likes.id < cursor`），关联查询对应未下架的视频实体。
+
+**5. 关注关系与互粉好友状态判定**：
+- 关注操作在单一事务中写入 `follows` 表，并通过 `RowsAffected == 1` 驱动原子维护 `relation_stats`（关注者的 `following_count + 1` 与被关注者的 `follower_count + 1`）。
+- 关系查询接口返回三态：`is_following`（我是否关注对方）、`is_follower`（对方是否关注我）、`is_friend = is_following && is_follower`（互粉好友）。
+- 针对自关注行为（`follower_id == vlogger_id`）在领域层与 Service 层进行强校验拦截。
 
 #### 3.2.3 Outbox 可靠事件派发机制
 
@@ -331,12 +352,13 @@ CREATE TABLE outbox (
 | **M2** | `videos` | id, author_id, title, description, cover_url, play_url, duration_ms, status, published_at | (`status`, `id` DESC)<br>(`author_id`, `status`, `id` DESC)<br>(`published_at`) | 视频主表。`published_at` 专供滑动窗口寻找 Floor |
 | **M2** | `video_stats` | video_id(PK), like_count, comment_count, view_count | PRIMARY KEY(`video_id`) | 视频计数表，垂直拆分以隔离高频行级写锁 |
 | **M2.5**| `upload_sessions` | id, user_id, file_hash, file_size, chunk_size, total_chunks, uploaded_bitmap, status, expires_at | UNIQUE(`user_id`, `file_hash`)<br>(`status`, `expires_at`) | 分片上传会话。`uploaded_bitmap` 作为分片权威源 |
-| **M4** | `likes` | id, user_id, video_id, created_at | UNIQUE(`user_id`, `video_id`)<br>(`video_id`) | 点赞关系表 |
-| **M4** | `comments` | id, video_id, user_id, parent_id, content, idempotency_key, status, created_at | UNIQUE(`user_id`, `idempotency_key`)<br>(`video_id`, `status`, `id` DESC) | 评论记录表，唯一键支持请求重试幂等 |
-| **M4** | `follows` | id, follower_id, vlogger_id, created_at | UNIQUE(`follower_id`, `vlogger_id`)<br>(`vlogger_id`, `follower_id`) | 关注关系表 |
-| **M4** | `relation_stats` | user_id(PK), following_count, follower_count | PRIMARY KEY(`user_id`) | 用户关注与粉丝统计 |
-| **M4** | `outbox` | id, event_id, event_type, payload, status, attempts... | 见 3.2.3 节定义 | 本地消息表 |
-| **M4** | `consumed_events`| event_id(PK), consumed_at | PRIMARY KEY(`event_id`) | 消费端事务幂等去重表 |
+| **M4** | `likes` | id, user_id, video_id, created_at | UNIQUE(`user_id`, `video_id`)<br>(`video_id`)<br>(`user_id`, `id` DESC) | 点赞关系表。`idx_user_id` 专供已赞作品流倒序游标分页 |
+| **M4** | `comments` | id, video_id, user_id, parent_id, content, like_count, idempotency_key, status, created_at, updated_at | UNIQUE(`user_id`, `idempotency_key`)<br>(`video_id`, `status`, `id` DESC)<br>(`video_id`, `status`, `like_count` DESC, `id` DESC) | 评论记录表。客户端唯一键支持重发幂等；复合索引支持时间与热评双模分页 |
+| **M4** | `comment_likes` | id, user_id, comment_id, created_at | UNIQUE(`user_id`, `comment_id`)<br>(`comment_id`) | 评论点赞关系表 |
+| **M4** | `follows` | id, follower_id, vlogger_id, created_at | UNIQUE(`follower_id`, `vlogger_id`)<br>(`vlogger_id`, `id` DESC)<br>(`follower_id`, `id` DESC) | 关注关系表。支持粉丝列表与关注列表单调 ID 游标翻页 |
+| **M4** | `relation_stats` | user_id(PK), following_count, follower_count, updated_at | PRIMARY KEY(`user_id`) | 用户关注与粉丝统计表，隔离高频行级锁 |
+| **M4** | `outbox` | id, event_id, event_type, payload, status, attempts... | 见 3.2.3 节定义（含 `idx_dispatch`, `idx_lease`, `idx_lease_token`） | 本地事务消息表，支撑异步最终一致性派发与分布式租约抢占 |
+| **M4** | `consumed_events`| event_id(PK), consumed_at | PRIMARY KEY(`event_id`) | 消费端事务幂等去重表，保障精确一次消费 |
 | **M5** | `notifications` | id, recipient_id, actor_id, type, target_id, is_read, created_at | (`recipient_id`, `created_at` DESC, `id` DESC)<br>(`recipient_id`, `is_read`) | 系统通知明细表 |
 
 ### 4.1 分片上传状态机与位图控制
