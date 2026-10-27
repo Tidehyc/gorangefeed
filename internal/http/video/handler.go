@@ -1,6 +1,7 @@
 package video
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,10 +13,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// PublishHook is a callback function invoked after a video is published successfully.
+type PublishHook func(ctx context.Context, videoID int64)
+
 // Handler handles HTTP requests for video domain.
 type Handler struct {
 	svc          servicevideo.Service
 	videoStorage *storage.VideoStorage
+	publishHooks []PublishHook
 }
 
 // NewHandler creates a new video Handler instance.
@@ -23,6 +28,13 @@ func NewHandler(svc servicevideo.Service, videoStorage *storage.VideoStorage) *H
 	return &Handler{
 		svc:          svc,
 		videoStorage: videoStorage,
+	}
+}
+
+// AddPublishHook registers a callback to be called whenever a video is published.
+func (h *Handler) AddPublishHook(hook PublishHook) {
+	if hook != nil {
+		h.publishHooks = append(h.publishHooks, hook)
 	}
 }
 
@@ -119,6 +131,12 @@ func (h *Handler) Publish(c *gin.Context) {
 	if err != nil {
 		response.Fail(c, err)
 		return
+	}
+
+	if detail != nil && detail.Video != nil {
+		for _, hook := range h.publishHooks {
+			hook(c.Request.Context(), detail.Video.ID)
+		}
 	}
 
 	response.Success(c, http.StatusCreated, detail)

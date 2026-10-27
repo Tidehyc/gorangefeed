@@ -17,6 +17,8 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
+	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -79,6 +81,47 @@ func main() {
 		l.Info("worker metrics server listening", "port", cfg.Worker.MetricsPort)
 		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			l.Error("worker metrics server error", "error", err)
+		}
+	}()
+
+	// 6. Initialize Feed service and periodic timeline maintenance
+	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	pageCache := persistencefeed.NewPageCacheRepository(rdb)
+	cardCache := persistencefeed.NewCardCacheRepository(rdb)
+	statCache := persistencefeed.NewStatCacheRepository(rdb)
+	exposureRepo := persistencefeed.NewExposureRepository(rdb)
+	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	feedSvc := servicefeed.NewService(timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo)
+
+	// Periodic Feed timeline maintenance (SyncFloorAndTrim)
+	// Trims videos older than 72 hours from Redis and synchronizes timeline:floor
+	go func() {
+		// Run once on worker startup
+		startupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if floor, err := feedSvc.SyncFloorAndTrim(startupCtx); err != nil {
+			l.Warn("initial sync floor and trim error", "error", err)
+		} else {
+			l.Info("initial timeline floor synced", "floor", floor)
+		}
+		cancel()
+
+		trimTicker := time.NewTicker(10 * time.Minute)
+		defer trimTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				l.Info("timeline trimmer loop exiting")
+				return
+			case <-trimTicker.C:
+				trimCtx, trimCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				floor, err := feedSvc.SyncFloorAndTrim(trimCtx)
+				trimCancel()
+				if err != nil {
+					l.Warn("periodic sync floor and trim error", "error", err)
+				} else {
+					l.Info("periodic timeline floor synced and trimmed", "floor", floor)
+				}
+			}
 		}
 	}()
 

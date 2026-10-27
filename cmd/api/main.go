@@ -13,6 +13,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
@@ -20,6 +21,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
@@ -27,6 +29,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 )
@@ -104,7 +107,24 @@ func main() {
 	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
 	uploadHandler := httpupload.NewHandler(uploadSvc)
 
-	// 7. Construct Router with probe checks
+	// 7. Assemble Feed Domain & Caches
+	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	pageCache := persistencefeed.NewPageCacheRepository(rdb)
+	cardCache := persistencefeed.NewCardCacheRepository(rdb)
+	statCache := persistencefeed.NewStatCacheRepository(rdb)
+	exposureRepo := persistencefeed.NewExposureRepository(rdb)
+	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	feedSvc := servicefeed.NewService(timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo)
+	feedHandler := httpfeed.NewHandler(feedSvc)
+
+	// Hook into video publishing to append published videos to timeline
+	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
+		if err := feedSvc.AppendTimeline(ctx, videoID); err != nil {
+			l.Warn("failed to append published video to feed timeline", "video_id", videoID, "error", err)
+		}
+	})
+
+	// 8. Construct Router with probe checks
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error {
 			return mysql.Ping(ctx, db)
@@ -122,6 +142,7 @@ func main() {
 	httpaccount.RegisterRoutes(engine, accountHandler, jwtMgr, tokenStore, rdb)
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
+	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

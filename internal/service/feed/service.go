@@ -425,7 +425,13 @@ func (s *service) AppendTimeline(ctx context.Context, videoID int64) error {
 		return domainfeed.ErrInvalidVideoID
 	}
 	if s.timelineRepo != nil {
-		return s.timelineRepo.Append(ctx, videoID)
+		if err := s.timelineRepo.Append(ctx, videoID); err != nil {
+			return err
+		}
+	}
+	if s.pageCache != nil {
+		_ = s.pageCache.DeletePage(ctx, "feed:page:global:anon:0:10:v1")
+		_ = s.pageCache.DeletePage(ctx, "feed:page:global:anon:0:3:v1")
 	}
 	return nil
 }

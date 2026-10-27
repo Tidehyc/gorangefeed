@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M3 核心领域、多级缓存与编排服务已就绪（M3-01~05 DONE），进行 HTTP 控制器与端到端测试联调（TODO）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：5 / 8 项（62.5%） |
-| **进行中任务** | 已完成 M3 领域模型、Redis ZSet 时间线与 Lua 原子裁剪、L1/L3/L4 多级缓存、MySQL 冷区兜底、冷热拼接与播放上报编排闭环，待推进 M3-06~M3-08 |
+| **当前阶段** | **M3 全局最新 Feed 流与播放上报全生命周期已闭环（M3-01~08 DONE），准备推进 M4 互动与推拉关注流** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） |
+| **进行中任务** | 已全面跑通 Feed 领域、L1~L4 多级缓存、Redis ZSet 时间线与 Lua 原子裁剪、MySQL 冷热无缝拼接、HTTP 控制器与端到端全生命周期 E2E 测试 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 实现 Feed HTTP 控制器与软鉴权路由挂载（M3-06）、依赖装配联动（M3-07）及端到端全生命周期集成测试（M3-08） |
+| **下一步行动** | 待用户确认后，规划并启动 M4 点赞/关注事务一致性、Outbox 本地消息表调度与推拉结合关注流研发 |
 
 ---
 
@@ -36,7 +36,7 @@
 | **M1** | 账号、双 Token 与安全中间件 | FR-ACC-01~06, NFR-SEC-07 | `DONE` | 登录、刷新、登出及旧 Token 撤销全流程通过；软鉴权与频控限流测试通过 |
 | **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `DONE` | E2E 单测跑通上传、发布、206 Range 分段点播、详情、游标分页与下架；`videos` 与 `video_stats` 事务一致 |
 | **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `DONE` | 200MB 文件断网重试续传成功；基于 Redis Bitmap 与分布式锁杜绝并发脏写与重复合并；MySQL 权威状态机保证一致性 |
-| **M3** | 全局最新流与播放曝光上报 | FR-FEED-01, 03, 04, FR-VID-08 | `TODO` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确；上报播放行为驱动 `view_count` 自增与曝光打底 |
+| **M3** | 全局最新流与播放曝光上报 | FR-FEED-01, 03, 04, FR-VID-08 | `DONE` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确；上报播放行为驱动 `view_count` 自增与曝光打底 |
 | **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `TODO` | 高并发点赞计数不丢；我点赞的视频流倒序分页；评论支持幂等防重放与点赞；关注流推拉合并正确；互粉好友判定；Outbox 运转正常 |
 | **M4.5**| 实时热榜与轻量推荐流（进阶流） | FR-FEED-05, FR-FEED-06 | `TODO` | 60分钟滑动窗口互动热度衰减（ZSet分钟桶）；as_of+offset稳定快照分页；热门/最新/探索多路召回、曝光去重与同作者打散 |
 | **M5** | 系统通知与单实例 SSE | FR-NOT-01~05, FR-NOT-07 | `TODO` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；SSE 在线推送与断线补拉验证完整 |
@@ -146,9 +146,9 @@
 | **M3-03** | 多级缓存体系（L1 逻辑过期+Singleflight、L3 卡片、L4 实时计数）实现 | M0-06, M3-01 | 采纳 GCFeed 模式实现 L1 页缓存（`feed:page:{scene}:{viewer}:{cursor}:{limit}:{rankVersion}`，含逻辑过期结构体与 `singleflight.Group` 进程内防击穿并发合并，30s 容忍平滑返回）；实现 L3 视频卡片（`feed:card:{videoID}`，15m TTL）与 L4 统计缓存（`feed:stat:{videoID}`，15s TTL）的批量 MGET/MSET 存取 | `DONE` |
 | **M3-04** | MySQL 冷数据兜底查询与 Floor 动态分界持久化 | M2-01, M3-01 | 在 `internal/infra/persistence/feed` 基于 GORM 实现 `FeedDBRepository`；实现基于 `idx_status_id (status, id DESC)` 的单调 ID 游标翻页查询（`id < cursor`）；实现 72h Floor 动态分界计算 `SELECT MIN(id) FROM videos WHERE status = 1 AND published_at >= NOW() - INTERVAL 72 HOUR` | `DONE` |
 | **M3-05** | Feed 业务编排、冷热拼接与播放曝光上报闭环 | M3-01~04 | 在 `internal/service/feed` 编排读链路：L1 命中返回 → L2 时间线拉取 candidate IDs → 下架状态过滤与 `next_cursor` 推进至最后扫描项（单次扫描上限 500 条） → **冷热无缝拼接（热区不足时计算 remainLimit 从 MySQL 补齐）** → 越过 Floor 或 Redis 异常自动平滑降级 MySQL 冷区 → L3/L4 缺失异步批量回填 → 回写 L1 页缓存；**实现播放与曝光行为处理（驱动 `video_stats.view_count` 原子累加，异步写入 Redis 近期用户曝光集合为推荐去重打底）**；提供视频发布后的时间线追加钩子；覆盖单测与 Mock 测试 | `DONE` |
-| **M3-06** | Feed HTTP 控制器与软鉴权路由挂载 | M3-05 | 在 `internal/http/feed` 暴露 `GET /api/v1/feed/global` 全局流接口与 `POST /api/v1/videos/:videoId/view` 播放曝光上报接口；挂载 `SoftJWTAuth` 中间件（匿名返回通用流，登录态解析 `userID` 注入上下文）；支持 `cursor` 与 `limit`（默认 10，最大 30）参数校验；统一 API Envelope；编写 Handler 单元测试 | `TODO` |
-| **M3-07** | 路由挂载与依赖装配联动 | M3-06 | 在 `cmd/api/main.go` 完成 Feed 仓储、多级缓存、Service 与 Handler 的依赖组装；注册 `/api/v1/feed/*` 与 `/api/v1/videos/:videoId/view` 路由；在视频发布成功后联动触发时间线同步更新（写失效记录 Warn 日志不阻断发布）；探针检查生效 | `TODO` |
-| **M3-08** | M3 全局 Feed 端到端全生命周期与 8 组边界 E2E 测试 | M3-07 | 在 `test/e2e/feed_lifecycle_test.go` 中验证：首页首次加载 → 游标翻页无重无漏 → 连续下架视频自动后移补齐与游标推进断言 → Floor 临界跨越冷热拼接无缝衔接 → 模拟 Redis 宕机平滑降级 MySQL → 游客与登录态软鉴权隔离 → **播放行为上报驱动 `view_count` 自增与近期曝光记录落盘**等核心用例 | `TODO` |
+| **M3-06** | Feed HTTP 控制器与软鉴权路由挂载 | M3-05 | 在 `internal/http/feed` 暴露 `GET /api/v1/feed/global` 全局流接口与 `POST /api/v1/videos/:videoId/view` 播放曝光上报接口；挂载 `SoftJWTAuth` 中间件（匿名返回通用流，登录态解析 `userID` 注入上下文）；支持 `cursor` 与 `limit`（默认 10，最大 30）参数校验；统一 API Envelope；编写 Handler 单元测试 | `DONE` |
+| **M3-07** | 路由挂载与依赖装配联动 | M3-06 | 在 `cmd/api/main.go` 完成 Feed 仓储、多级缓存、Service 与 Handler 的依赖组装；注册 `/api/v1/feed/*` 与 `/api/v1/videos/:videoId/view` 路由；在视频发布成功后联动触发时间线同步更新（写失效记录 Warn 日志不阻断发布）；探针检查生效 | `DONE` |
+| **M3-08** | M3 全局 Feed 端到端全生命周期与 8 组边界 E2E 测试 | M3-07 | 在 `test/e2e/feed_lifecycle_test.go` 中验证：首页首次加载 → 游标翻页无重无漏 → 连续下架视频自动后移补齐与游标推进断言 → Floor 临界跨越冷热拼接无缝衔接 → 模拟 Redis 宕机平滑降级 MySQL → 游客与登录态软鉴权隔离 → **播放行为上报驱动 `view_count` 自增与近期曝光记录落盘**等核心用例 | `DONE` |
 
 ---
 

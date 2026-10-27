@@ -14,6 +14,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
@@ -21,6 +22,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
@@ -28,6 +30,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 	"github.com/gin-gonic/gin"
@@ -81,6 +84,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 		t.Skipf("skipping E2E test: Redis not reachable on %s (%v)", cfg.Redis.Addr(), err)
 		return nil, "", nil
 	}
+	_ = rdb.FlushDB(context.Background()).Err()
 
 	tempDir, err := os.MkdirTemp("", "gorangefeed_e2e_storage_*")
 	if err != nil {
@@ -116,6 +120,19 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
 	uploadHandler := httpupload.NewHandler(uploadSvc)
 
+	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	pageCache := persistencefeed.NewPageCacheRepository(rdb)
+	cardCache := persistencefeed.NewCardCacheRepository(rdb)
+	statCache := persistencefeed.NewStatCacheRepository(rdb)
+	exposureRepo := persistencefeed.NewExposureRepository(rdb)
+	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	feedSvc := servicefeed.NewService(timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo)
+	feedHandler := httpfeed.NewHandler(feedSvc)
+
+	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
+		_ = feedSvc.AppendTimeline(ctx, videoID)
+	})
+
 	gin.SetMode(gin.TestMode)
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error { return mysql.Ping(ctx, db) },
@@ -126,6 +143,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	httpaccount.RegisterRoutes(engine, handler, jwtMgr, tokenStore, rdb)
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
+	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
 
 	cleanup := func() {
 		_ = os.RemoveAll(tempDir)
