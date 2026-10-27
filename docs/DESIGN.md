@@ -151,10 +151,23 @@ flowchart TD
 - **降级保护**：旧值最大容忍服务时间 `maxStale = 30s`；异步刷新若连续失败 3 次，立刻退化为同步读 DB 兜底并上报指标。
 
 #### 3.1.4 L2 时间线滑动窗口与原子裁剪
-1. **排序与游标统一定义**：
-   - ZSet 的 score 使用自增单调的 `video.id`，member 为 `video.id`。
-   - 游标直接复用 `video.id`，翻页命令：`ZREVRANGEBYSCORE timeline:global (cursorID -inf LIMIT 0 N`。
-   - **架构约束**：MVP 阶段“视频发布”即执行 `INSERT INTO videos`，不存在草稿态；自增 ID 严格保证了创建时序单调性。若未来引入草稿与定时发布，必须引入独立的单调发布序号 `publish_seq` 替代 `id`。
+1. **排序权威源与游标设计决策**：
+   - **当前方案**：ZSet 的 score 使用自增单调的 `video.id`，member 为 `video.id`；游标直接复用 `video.id`，翻页命令：`ZREVRANGEBYSCORE timeline:global (cursorID -inf LIMIT 0 N`。
+   - **为什么不直接用 `(published_at, id)` 复合游标或毫秒戳？**
+     - Redis Sorted Set 底层的 Score 是 64 位双精度浮点数（IEEE 754 float64），**有效尾数仅 53 位**（上限约 $9 \times 10^{15}$）。
+     - 毫秒级时间戳（41 位）若与高位 `video_id` 拼接合成 Score，会超出 53 位导致浮点舍入截断，排序失真。
+     - 若仅用时间戳作为 Score，高并发下同毫秒多视频并发写入会导致 Score 碰撞，客户端分页引发漏刷与滑重。
+   - **自增主键替代时间戳的业务前置假设与失效场景**：
+     - 当前 M2/M3 阶段为“上传即发布”，`published_at` 等同于 `created_at`，单库自增 ID 能严格代表物理插入时序。
+     - **后续失效场景**：
+       1. **草稿箱与定时发布**：周一建草稿（ID=100），周五发布；周四直发视频（ID=200）。按 `id DESC` 会导致周五新发布的视频沉底。
+       2. **内容安全审核延迟**：视频 A 命中复杂机审卡了 10 分钟，视频 B 秒审通过先发布。若按 ID 排序会引发时序倒错。
+       3. **长事务并发乱序提交（Commit Skew）**：长事务占有较小 ID 滞后提交，造成先被拉取后的“时间线空洞”。
+   - **分布式演进路线（引入 `publish_seq` 独立发布序列号）**：
+     - 利用 Feed 场景**读极高、写极低（读写比通常 ≥ 1000:1）**的物理本质，写路径允许收拢：
+       1. **单 Region / 多实例集群**：采用 Redis 独立原子发号器（`INCR timeline:global:seq`，性能轻松突破 100k QPS）或号段模式（如 Leaf/Tinyid）在正式发布时赋予单调唯一的 `publish_seq`。
+       2. **超大规模 / 跨机房集群**：结合 M4 的 Outbox 事件驱动机制，视频发布写入 Outbox 表，由专享的 Timeline Worker 单分区有序消费，在写入 Redis ZSet 时间线的瞬间原子打标 `publish_seq`，天然收敛分布式乱序。
+       3. **MySQL 端联合索引**：MySQL 同步维护 `KEY idx_status_published_id (status, published_at DESC, id DESC)`，冷区查询支持基于 `(published_at, id) < (?, ?)` 行比较符稳定翻页。
 2. **Floor 边界与区间互补**：
    - 窗口维持 72 小时内的最新内容。通过定时任务计算分界点：
      ```sql
