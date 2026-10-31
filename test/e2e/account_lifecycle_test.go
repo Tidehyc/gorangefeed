@@ -15,6 +15,8 @@ import (
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
+	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
+	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
@@ -23,17 +25,25 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
+	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
+	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
+	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
+	servicerelation "github.com/Tidehyc/gorangefeed/internal/service/relation"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 	"github.com/gin-gonic/gin"
+	amqp "github.com/rabbitmq/amqp091-go"
+	goredis "github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // setupE2ETest initializes a live test router with actual MySQL and Redis connections.
@@ -120,13 +130,24 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
 	uploadHandler := httpupload.NewHandler(uploadSvc)
 
+	interactionRepo := persistenceinteraction.NewRepository(db)
+	relationRepo := persistencerelation.NewRepository(db)
+	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
+	interactionSvc := serviceinteraction.NewService(interactionRepo, videoRepo, repo)
+	relationSvc := servicerelation.NewService(relationRepo, repo)
+	interactionHandler := httpinteraction.NewHandler(interactionSvc)
+	relationHandler := httprelation.NewHandler(relationSvc)
+
 	timelineRepo := persistencefeed.NewTimelineStore(rdb)
 	pageCache := persistencefeed.NewPageCacheRepository(rdb)
 	cardCache := persistencefeed.NewCardCacheRepository(rdb)
 	statCache := persistencefeed.NewStatCacheRepository(rdb)
 	exposureRepo := persistencefeed.NewExposureRepository(rdb)
 	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
-	feedSvc := servicefeed.NewService(timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo)
+	feedSvc := servicefeed.NewService(
+		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
+		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
+	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
@@ -144,6 +165,8 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
 	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
+	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
+	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
 
 	cleanup := func() {
 		_ = os.RemoveAll(tempDir)
@@ -154,6 +177,154 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	}
 
 	return engine, tempDir, cleanup
+}
+
+type e2eExtendedCtx struct {
+	Engine        *gin.Engine
+	DB            *gorm.DB
+	RDB           *goredis.Client
+	MQConn        *amqp.Connection
+	TempDir       string
+	InteractionSvc *serviceinteraction.Service
+	RelationSvc   *servicerelation.Service
+	FeedSvc       servicefeed.Service
+}
+
+func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
+	t.Helper()
+
+	configPath := os.Getenv("CONFIG_PATH")
+	if configPath == "" {
+		for _, candidate := range []string{
+			"../../configs/config.yaml",
+			"../../../configs/config.yaml",
+			"configs/config.yaml",
+			"../configs/config.yaml",
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				configPath = candidate
+				break
+			}
+		}
+	}
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		t.Skipf("skipping E2E test: failed to load config (%v)", err)
+		return nil, nil
+	}
+
+	db, err := mysql.New(&cfg.MySQL)
+	if err != nil {
+		t.Skipf("skipping E2E test: MySQL not reachable on %s:%d (%v)", cfg.MySQL.Host, cfg.MySQL.Port, err)
+		return nil, nil
+	}
+
+	migrationsDir := "../../migrations"
+	if _, err := os.Stat(migrationsDir); err != nil {
+		for _, cand := range []string{"migrations", "../migrations", "../../../migrations"} {
+			if _, err := os.Stat(cand); err == nil {
+				migrationsDir = cand
+				break
+			}
+		}
+	}
+	if _, _, err := migration.RunUp(cfg.MySQL.DSN(), migrationsDir); err != nil {
+		t.Fatalf("failed to run migrations for E2E test: %v", err)
+	}
+
+	rdb, err := redis.New(&cfg.Redis)
+	if err != nil {
+		t.Skipf("skipping E2E test: Redis not reachable on %s (%v)", cfg.Redis.Addr(), err)
+		return nil, nil
+	}
+	_ = rdb.FlushDB(context.Background()).Err()
+
+	mqConn, _ := rabbitmq.New(&cfg.RabbitMQ)
+
+	tempDir, err := os.MkdirTemp("", "gorangefeed_e2e_storage_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+
+	avatarStorage, _ := storage.NewAvatarStorage(tempDir)
+	repo := persistenceaccount.NewRepository(db)
+	tokenStore := persistenceaccount.NewTokenStore(rdb)
+	jwtMgr := jwt.NewTokenManager(cfg.JWT)
+	svc := serviceaccount.NewService(repo, tokenStore, jwtMgr, cfg.JWT)
+	handler := httpaccount.NewHandler(svc, jwtMgr, avatarStorage)
+
+	videoStorage, _ := storage.NewVideoStorage(tempDir)
+	videoRepo := persistencevideo.NewRepository(db)
+	videoSvc := servicevideo.NewService(videoRepo, repo)
+	videoHandler := httpvideo.NewHandler(videoSvc, videoStorage)
+
+	uploadSessionRepo := persistenceupload.NewSessionRepository(db)
+	uploadBitmapStore := persistenceupload.NewBitmapStore(rdb)
+	uploadMergeLocker := persistenceupload.NewMergeLocker(rdb)
+	chunkStorage, _ := storage.NewChunkStorage(tempDir)
+	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
+	uploadHandler := httpupload.NewHandler(uploadSvc)
+
+	interactionRepo := persistenceinteraction.NewRepository(db)
+	relationRepo := persistencerelation.NewRepository(db)
+	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
+	interactionSvc := serviceinteraction.NewService(interactionRepo, videoRepo, repo)
+	relationSvc := servicerelation.NewService(relationRepo, repo)
+	interactionHandler := httpinteraction.NewHandler(interactionSvc)
+	relationHandler := httprelation.NewHandler(relationSvc)
+
+	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	pageCache := persistencefeed.NewPageCacheRepository(rdb)
+	cardCache := persistencefeed.NewCardCacheRepository(rdb)
+	statCache := persistencefeed.NewStatCacheRepository(rdb)
+	exposureRepo := persistencefeed.NewExposureRepository(rdb)
+	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	feedSvc := servicefeed.NewService(
+		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
+		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
+	)
+	feedHandler := httpfeed.NewHandler(feedSvc)
+
+	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
+		_ = feedSvc.AppendTimeline(ctx, videoID)
+	})
+
+	gin.SetMode(gin.TestMode)
+	engine := router.NewRouter(router.DependencyChecks{
+		CheckMySQL: func(ctx context.Context) error { return mysql.Ping(ctx, db) },
+		CheckRedis: func(ctx context.Context) error { return redis.Ping(ctx, rdb) },
+	})
+
+	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
+	httpaccount.RegisterRoutes(engine, handler, jwtMgr, tokenStore, rdb)
+	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
+	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
+	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
+	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
+	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
+
+	cleanup := func() {
+		_ = os.RemoveAll(tempDir)
+		_ = rdb.Close()
+		if mqConn != nil {
+			_ = mqConn.Close()
+		}
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}
+
+	return &e2eExtendedCtx{
+		Engine:         engine,
+		DB:             db,
+		RDB:            rdb,
+		MQConn:         mqConn,
+		TempDir:        tempDir,
+		InteractionSvc: interactionSvc,
+		RelationSvc:    relationSvc,
+		FeedSvc:        feedSvc,
+	}, cleanup
 }
 
 func parseJSONResponse(t *testing.T, w *httptest.ResponseRecorder, target interface{}) {
