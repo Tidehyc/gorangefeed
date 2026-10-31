@@ -72,3 +72,21 @@ type ExposureRepository interface {
 	// IsExposed checks if a viewer has already been exposed to a video.
 	IsExposed(ctx context.Context, viewerID int64, videoID int64) (bool, error)
 }
+
+// FollowingFeedRepository defines storage contracts for the hybrid push-pull following feed.
+type FollowingFeedRepository interface {
+	// PushToInboxes writes videoID to the inbox ZSets of followerIDs in batch, trimmed to maxCapacity.
+	PushToInboxes(ctx context.Context, followerIDs []int64, videoID int64, maxCapacity int) error
+	// PushToAuthorOutbox writes videoID to the author's outbox ZSet, trimmed to maxCapacity.
+	PushToAuthorOutbox(ctx context.Context, authorID int64, videoID int64, maxCapacity int) error
+	// GetInboxVideoIDs retrieves video IDs from user's inbox ZSet with cursor pagination (strictly score < cursor).
+	GetInboxVideoIDs(ctx context.Context, userID int64, cursor int64, limit int) ([]int64, error)
+	// GetAuthorOutboxVideoIDs retrieves video IDs from author's outbox ZSet with cursor pagination (strictly score < cursor).
+	GetAuthorOutboxVideoIDs(ctx context.Context, authorID int64, cursor int64, limit int) ([]int64, error)
+	// CheckInboxExists checks whether the user's inbox ZSet currently exists in Redis.
+	CheckInboxExists(ctx context.Context, userID int64) (bool, error)
+	// PrewarmInbox rebuilds or updates user's inbox ZSet with given video IDs.
+	PrewarmInbox(ctx context.Context, userID int64, videoIDs []int64, maxCapacity int) error
+	// ListFollowingVideosFromDB queries published video IDs from MySQL for authors, ordered by id DESC.
+	ListFollowingVideosFromDB(ctx context.Context, authorIDs []int64, cursor int64, limit int) ([]int64, error)
+}

@@ -15,4 +15,6 @@ var (
 	ErrInvalidEventType = errors.New("invalid view event type")
 	// ErrInvalidVideoID indicates the video ID is invalid (<= 0).
 	ErrInvalidVideoID = errors.New("invalid video id")
+	// ErrInvalidViewerID indicates viewer ID is non-positive when required.
+	ErrInvalidViewerID = errors.New("invalid viewer id")
 )

@@ -92,6 +92,7 @@ type FeedItem struct {
 	Author      FeedAuthor `json:"author"`
 	Stats       FeedStat   `json:"stats"`
 	IsLiked     bool       `json:"is_liked"`
+	IsFollowed  bool       `json:"is_followed"`
 }
 
 // FeedPage represents a paginated list of feed items.

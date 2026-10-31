@@ -2,10 +2,13 @@ package video
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
+	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
+	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
 	"github.com/go-sql-driver/mysql"
 	"gorm.io/gorm"
 )
@@ -20,6 +23,10 @@ func NewRepository(db *gorm.DB) domainvideo.Repository {
 }
 
 func (r *gormRepository) CreateWithStats(ctx context.Context, video *domainvideo.Video, stats *domainvideo.VideoStats) error {
+	return r.CreateWithStatsAndOutbox(ctx, video, stats, nil)
+}
+
+func (r *gormRepository) CreateWithStatsAndOutbox(ctx context.Context, video *domainvideo.Video, stats *domainvideo.VideoStats, outboxEvent *domainoutbox.Event) error {
 	if video == nil {
 		return errors.New("video cannot be nil")
 	}
@@ -56,6 +63,17 @@ func (r *gormRepository) CreateWithStats(ctx context.Context, video *domainvideo
 		stats.VideoID = statModel.VideoID
 		stats.CreatedAt = statModel.CreatedAt
 		stats.UpdatedAt = statModel.UpdatedAt
+
+		if outboxEvent != nil {
+			outboxEvent.Payload, _ = json.Marshal(map[string]any{
+				"video_id":     video.ID,
+				"author_id":    video.AuthorID,
+				"published_at": video.PublishedAt,
+			})
+			if err := persistenceoutbox.SaveEventInTx(ctx, tx, outboxEvent); err != nil {
+				return fmt.Errorf("create outbox event error: %w", err)
+			}
+		}
 
 		return nil
 	})

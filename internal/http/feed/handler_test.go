@@ -41,6 +41,10 @@ func (m *mockFeedService) SyncFloorAndTrim(ctx context.Context) (int64, error) {
 	return 0, nil
 }
 
+func (m *mockFeedService) ListFollowingFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
+	return &domainfeed.FeedPage{Items: []*domainfeed.FeedItem{}}, nil
+}
+
 func setupTestEngine(svc *mockFeedService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

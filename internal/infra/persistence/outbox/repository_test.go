@@ -53,6 +53,12 @@ func TestGormOutboxRepository_ClaimAndLifecycle(t *testing.T) {
 	}
 	ctx := context.Background()
 
+	// Clean up outbox table before and after test for test isolation
+	db.Exec("DELETE FROM outbox")
+	defer func() {
+		db.Exec("DELETE FROM outbox")
+	}()
+
 	// 1. Save an event in tx
 	event, err := domainoutbox.NewEvent("test.event", map[string]string{"foo": "bar"})
 	if err != nil {
@@ -68,7 +74,7 @@ func TestGormOutboxRepository_ClaimAndLifecycle(t *testing.T) {
 
 	// 2. Claim lease
 	token := uuid.New().String()
-	claimed, err := repo.ClaimLease(ctx, token, 30*time.Second, 10)
+	claimed, err := repo.ClaimLease(ctx, token, 30*time.Second, 100)
 	if err != nil {
 		t.Fatalf("ClaimLease failed: %v", err)
 	}

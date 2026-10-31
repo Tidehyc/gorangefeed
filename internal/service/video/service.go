@@ -3,9 +3,11 @@ package video
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
+	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 )
@@ -84,7 +86,14 @@ func (s *service) Publish(ctx context.Context, authorID int64, title, descriptio
 		ViewCount:    0,
 	}
 
-	if err := s.repo.CreateWithStats(ctx, video, stats); err != nil {
+	outboxEvent, err := domainoutbox.NewEvent(domainoutbox.EventTypeVideoPublished, map[string]any{
+		"author_id": authorID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create outbox event error: %w", err)
+	}
+
+	if err := s.repo.CreateWithStatsAndOutbox(ctx, video, stats, outboxEvent); err != nil {
 		if errors.Is(err, domainvideo.ErrDuplicateIdempotencyKey) && idempotencyKey != "" {
 			// Concurrent race: Another request with same idempotency key committed first
 			existingV, existingStats, loadErr := s.repo.FindByAuthorAndIdempotencyKey(ctx, authorID, idempotencyKey)

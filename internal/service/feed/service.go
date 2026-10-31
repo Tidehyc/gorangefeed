@@ -2,11 +2,15 @@ package feed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
+	domaininteraction "github.com/Tidehyc/gorangefeed/internal/domain/interaction"
+	domainrelation "github.com/Tidehyc/gorangefeed/internal/domain/relation"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -14,6 +18,8 @@ import (
 type Service interface {
 	// GetGlobalFeed retrieves a page of the global video feed with multi-tier caching and cold-hot stitching.
 	GetGlobalFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
+	// ListFollowingFeed retrieves a page of the following feed using hybrid push-pull multi-way merge sort.
+	ListFollowingFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
 	// RecordView reports a video playback or exposure impression, incrementing view count and updating exposure history.
 	RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
 	// AppendTimeline appends a newly published video to the Redis timeline.
@@ -23,13 +29,32 @@ type Service interface {
 }
 
 type service struct {
-	timelineRepo domainfeed.TimelineRepository
-	pageCache    domainfeed.PageCacheRepository
-	cardCache    domainfeed.CardCacheRepository
-	statCache    domainfeed.StatCacheRepository
-	exposureRepo domainfeed.ExposureRepository
-	dbRepo       domainfeed.FeedDBRepository
-	sfGroup      singleflight.Group
+	timelineRepo    domainfeed.TimelineRepository
+	pageCache       domainfeed.PageCacheRepository
+	cardCache       domainfeed.CardCacheRepository
+	statCache       domainfeed.StatCacheRepository
+	exposureRepo    domainfeed.ExposureRepository
+	dbRepo          domainfeed.FeedDBRepository
+	followingRepo   domainfeed.FollowingFeedRepository
+	relationRepo    domainrelation.Repository
+	interactionRepo domaininteraction.Repository
+	sfGroup         singleflight.Group
+}
+
+// Option modifies service configuration.
+type Option func(*service)
+
+// WithFollowingDependencies injects dependencies for following feed support.
+func WithFollowingDependencies(
+	followingRepo domainfeed.FollowingFeedRepository,
+	relationRepo domainrelation.Repository,
+	interactionRepo domaininteraction.Repository,
+) Option {
+	return func(s *service) {
+		s.followingRepo = followingRepo
+		s.relationRepo = relationRepo
+		s.interactionRepo = interactionRepo
+	}
 }
 
 // NewService creates a new Feed Service instance.
@@ -40,8 +65,9 @@ func NewService(
 	statCache domainfeed.StatCacheRepository,
 	exposureRepo domainfeed.ExposureRepository,
 	dbRepo domainfeed.FeedDBRepository,
+	opts ...Option,
 ) Service {
-	return &service{
+	s := &service{
 		timelineRepo: timelineRepo,
 		pageCache:    pageCache,
 		cardCache:    cardCache,
@@ -49,6 +75,10 @@ func NewService(
 		exposureRepo: exposureRepo,
 		dbRepo:       dbRepo,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *service) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
@@ -292,8 +322,138 @@ func (s *service) buildColdPage(ctx context.Context, cacheKey string, cursor int
 	return cachedPage, nil
 }
 
+func (s *service) ListFollowingFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
+	if viewerID <= 0 {
+		return nil, domainfeed.ErrInvalidViewerID
+	}
+	if cursor < 0 {
+		return nil, domainfeed.ErrInvalidCursor
+	}
+	if limit <= 0 {
+		limit = domainfeed.DefaultLimit
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	if s.relationRepo == nil || s.followingRepo == nil {
+		return nil, errors.New("following feed dependencies not configured")
+	}
+
+	// 1. Get all authors viewer follows (cursor 0, limit 1000)
+	vloggerIDs, _, _, err := s.relationRepo.ListFollowingIDs(ctx, viewerID, 0, 1000)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list following IDs: %w", err)
+	}
+	if len(vloggerIDs) == 0 {
+		return &domainfeed.FeedPage{
+			Items:      []*domainfeed.FeedItem{},
+			NextCursor: 0,
+			HasMore:    false,
+		}, nil
+	}
+
+	// 2. Partition followed authors into normal authors and Big V authors (followers >= 5000)
+	var normalAuthors []int64
+	var bigVAuthors []int64
+
+	for _, aid := range vloggerIDs {
+		stats, err := s.relationRepo.GetStats(ctx, aid)
+		if err == nil && stats != nil && stats.FollowerCount >= BigVThreshold {
+			bigVAuthors = append(bigVAuthors, aid)
+		} else {
+			normalAuthors = append(normalAuthors, aid)
+		}
+	}
+
+	// 3. Multi-source candidate video gathering
+	candidateMap := make(map[int64]struct{})
+	fetchLimit := limit + 1
+
+	// 3a. Read from followed Big V authors' Outbox ZSets
+	for _, bigVAid := range bigVAuthors {
+		outboxIDs, err := s.followingRepo.GetAuthorOutboxVideoIDs(ctx, bigVAid, cursor, fetchLimit)
+		if err == nil {
+			for _, id := range outboxIDs {
+				candidateMap[id] = struct{}{}
+			}
+		}
+	}
+
+	// 3b. Read normal authors' videos from viewer's Inbox ZSet or fallback to DB
+	if len(normalAuthors) > 0 {
+		inboxExists, _ := s.followingRepo.CheckInboxExists(ctx, viewerID)
+		if inboxExists {
+			inboxIDs, err := s.followingRepo.GetInboxVideoIDs(ctx, viewerID, cursor, fetchLimit)
+			if err == nil {
+				for _, id := range inboxIDs {
+					candidateMap[id] = struct{}{}
+				}
+			}
+		} else {
+			// Cold start / Redis eviction: Fallback to MySQL query
+			dbIDs, err := s.followingRepo.ListFollowingVideosFromDB(ctx, normalAuthors, cursor, fetchLimit)
+			if err == nil {
+				for _, id := range dbIDs {
+					candidateMap[id] = struct{}{}
+				}
+			}
+			// Trigger asynchronous inbox pre-warming
+			go func(vID int64, nAuthors []int64) {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				recentIDs, err := s.followingRepo.ListFollowingVideosFromDB(bgCtx, nAuthors, 0, 100)
+				if err == nil && len(recentIDs) > 0 {
+					_ = s.followingRepo.PrewarmInbox(bgCtx, vID, recentIDs, 800)
+				}
+			}(viewerID, normalAuthors)
+		}
+	}
+
+	if len(candidateMap) == 0 {
+		return &domainfeed.FeedPage{
+			Items:      []*domainfeed.FeedItem{},
+			NextCursor: 0,
+			HasMore:    false,
+		}, nil
+	}
+
+	// 4. Multi-way merge sort & cursor pagination
+	sortedIDs := make([]int64, 0, len(candidateMap))
+	for id := range candidateMap {
+		if cursor > 0 && id >= cursor {
+			continue
+		}
+		sortedIDs = append(sortedIDs, id)
+	}
+
+	sort.Slice(sortedIDs, func(i, j int) bool {
+		return sortedIDs[i] > sortedIDs[j]
+	})
+
+	hasMore := false
+	var nextCursor int64 = 0
+	if len(sortedIDs) > limit {
+		hasMore = true
+		nextCursor = sortedIDs[limit-1]
+		sortedIDs = sortedIDs[:limit]
+	}
+
+	// 5. Hydrate items (IsFollowed = true)
+	items, err := s.hydrateVideoIDs(ctx, sortedIDs, viewerID, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate following feed items: %w", err)
+	}
+
+	return &domainfeed.FeedPage{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	}, nil
+}
+
 func (s *service) hydrateFeedPage(ctx context.Context, cachedPage *domainfeed.CachedPage, viewerID int64) (*domainfeed.FeedPage, error) {
-	if len(cachedPage.VideoIDs) == 0 {
+	if cachedPage == nil || len(cachedPage.VideoIDs) == 0 {
 		return &domainfeed.FeedPage{
 			Items:      []*domainfeed.FeedItem{},
 			NextCursor: cachedPage.NextCursor,
@@ -301,20 +461,37 @@ func (s *service) hydrateFeedPage(ctx context.Context, cachedPage *domainfeed.Ca
 		}, nil
 	}
 
+	items, err := s.hydrateVideoIDs(ctx, cachedPage.VideoIDs, viewerID, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &domainfeed.FeedPage{
+		Items:      items,
+		NextCursor: cachedPage.NextCursor,
+		HasMore:    cachedPage.HasMore,
+	}, nil
+}
+
+func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerID int64, isFollowed bool) ([]*domainfeed.FeedItem, error) {
+	if len(videoIDs) == 0 {
+		return []*domainfeed.FeedItem{}, nil
+	}
+
 	// 1. Fetch L3 Cards
 	cardMap := make(map[int64]*domainfeed.FeedCard)
 	if s.cardCache != nil {
-		cardMap, _ = s.cardCache.GetCards(ctx, cachedPage.VideoIDs)
+		cardMap, _ = s.cardCache.GetCards(ctx, videoIDs)
 	}
 
 	missingCardIDs := make([]int64, 0)
-	for _, id := range cachedPage.VideoIDs {
+	for _, id := range videoIDs {
 		if _, ok := cardMap[id]; !ok {
 			missingCardIDs = append(missingCardIDs, id)
 		}
 	}
 
-	if len(missingCardIDs) > 0 {
+	if len(missingCardIDs) > 0 && s.dbRepo != nil {
 		dbCards, err := s.dbRepo.GetCardsByIDs(ctx, missingCardIDs)
 		if err == nil {
 			cardsToBackfill := make([]*domainfeed.FeedCard, 0, len(dbCards))
@@ -333,17 +510,17 @@ func (s *service) hydrateFeedPage(ctx context.Context, cachedPage *domainfeed.Ca
 	// 2. Fetch L4 Stats
 	statMap := make(map[int64]*domainfeed.FeedStat)
 	if s.statCache != nil {
-		statMap, _ = s.statCache.GetStats(ctx, cachedPage.VideoIDs)
+		statMap, _ = s.statCache.GetStats(ctx, videoIDs)
 	}
 
 	missingStatIDs := make([]int64, 0)
-	for _, id := range cachedPage.VideoIDs {
+	for _, id := range videoIDs {
 		if _, ok := statMap[id]; !ok {
 			missingStatIDs = append(missingStatIDs, id)
 		}
 	}
 
-	if len(missingStatIDs) > 0 {
+	if len(missingStatIDs) > 0 && s.dbRepo != nil {
 		dbStats, err := s.dbRepo.GetStatsByIDs(ctx, missingStatIDs)
 		if err == nil {
 			statsToBackfill := make([]*domainfeed.FeedStat, 0, len(dbStats))
@@ -359,17 +536,25 @@ func (s *service) hydrateFeedPage(ctx context.Context, cachedPage *domainfeed.Ca
 		}
 	}
 
-	// 3. Assemble final FeedItems in original order
-	items := make([]*domainfeed.FeedItem, 0, len(cachedPage.VideoIDs))
-	for _, id := range cachedPage.VideoIDs {
+	// 3. Query viewer interaction (IsLiked) if available
+	likedMap := make(map[int64]bool)
+	if viewerID > 0 && s.interactionRepo != nil {
+		if m, err := s.interactionRepo.BatchIsLiked(ctx, viewerID, videoIDs); err == nil {
+			likedMap = m
+		}
+	}
+
+	// 4. Assemble final FeedItems in original order
+	items := make([]*domainfeed.FeedItem, 0, len(videoIDs))
+	for _, id := range videoIDs {
 		card, ok := cardMap[id]
 		if !ok || card == nil {
 			continue
 		}
 
 		stat := domainfeed.FeedStat{VideoID: id}
-		if s, ok := statMap[id]; ok && s != nil {
-			stat = *s
+		if st, ok := statMap[id]; ok && st != nil {
+			stat = *st
 		}
 
 		items = append(items, &domainfeed.FeedItem{
@@ -383,15 +568,12 @@ func (s *service) hydrateFeedPage(ctx context.Context, cachedPage *domainfeed.Ca
 			PublishedAt: card.PublishedAt,
 			Author:      card.Author,
 			Stats:       stat,
-			IsLiked:     false, // M4 foundation
+			IsLiked:     likedMap[id],
+			IsFollowed:  isFollowed,
 		})
 	}
 
-	return &domainfeed.FeedPage{
-		Items:      items,
-		NextCursor: cachedPage.NextCursor,
-		HasMore:    cachedPage.HasMore,
-	}, nil
+	return items, nil
 }
 
 func (s *service) RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error {

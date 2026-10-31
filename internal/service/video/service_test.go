@@ -6,6 +6,7 @@ import (
 	"time"
 
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
+	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 )
@@ -26,6 +27,10 @@ func (m *mockVideoRepo) CreateWithStats(ctx context.Context, video *domainvideo.
 	}
 	video.ID = 100
 	return nil
+}
+
+func (m *mockVideoRepo) CreateWithStatsAndOutbox(ctx context.Context, video *domainvideo.Video, stats *domainvideo.VideoStats, outboxEvent *domainoutbox.Event) error {
+	return m.CreateWithStats(ctx, video, stats)
 }
 
 func (m *mockVideoRepo) FindByID(ctx context.Context, id int64) (*domainvideo.Video, error) {

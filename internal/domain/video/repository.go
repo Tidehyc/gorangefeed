@@ -1,11 +1,19 @@
 package video
 
-import "context"
+import (
+	"context"
+
+	"github.com/Tidehyc/gorangefeed/internal/domain/outbox"
+)
 
 // Repository defines the data persistence contracts for the video domain.
 type Repository interface {
 	// CreateWithStats atomically inserts video metadata and initializes its stats row.
 	CreateWithStats(ctx context.Context, video *Video, stats *VideoStats) error
+
+	// CreateWithStatsAndOutbox atomically inserts video metadata, initializes its stats row,
+	// and persists an outbox event within the same database transaction.
+	CreateWithStatsAndOutbox(ctx context.Context, video *Video, stats *VideoStats, outboxEvent *outbox.Event) error
 
 	// FindByID retrieves a published video by its ID. Returns ErrVideoNotFound if not found or hidden.
 	FindByID(ctx context.Context, id int64) (*Video, error)
