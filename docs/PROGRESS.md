@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M3 全局最新 Feed 流与播放上报已全生命周期闭环，M4 互动、推拉关注流与 Outbox 骨架设计已全面定案（M4-01~14 待开发）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：0 / 14 项（0%） |
-| **进行中任务** | M4 骨架设计与任务拆解定案；待用户确认后启动 M4-01~02 数据库迁移脚本与领域模型接口契约实现 |
+| **当前阶段** | **M4 互动、推拉关注流与已赞作品推进中（M4-01~05 已闭环验收，准备推进 M4-06~08）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：5 / 14 项（35.7%） |
+| **进行中任务** | 已落地 000005~000007 迁移脚本、interaction/relation/outbox 领域模型契约、视频点赞/取消与 RowsAffected 原子防丢、我点赞的作品游标流、评论唯一键防重放与双模游标排序、自关注拦截与互粉好友状态判定 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 编写 000005~000007 迁移脚本，定义 interaction、relation、outbox 领域实体与仓储契约 |
+| **下一步行动** | 推进 M4-06~08 Outbox 本地消息表分布式租约调度、RabbitMQ 持久投递与消费端幂等、推拉结合关注流分发与读聚合 |
 
 ---
 
@@ -190,11 +190,11 @@ M4 阶段新增 3 组版本化迁移文件，保持表结构与索引设计最�
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M4-01** | 互动、关系与本地消息表迁移脚本 | M0-05 | 编写 `000005_create_interaction_tables`、`000006_create_relation_tables` 与 `000007_create_outbox_tables`；通过 `migrate up` 与 `migrate down` 回滚验证；CI 历史不变性校验绿灯 | `TODO` |
-| **M4-02** | 互动、关系与 Outbox 领域模型契约定义 | — | 在 `internal/domain/interaction`、`internal/domain/relation`、`internal/domain/outbox` 定义核心实体（`Like`、`Comment`、`CommentLike`、`Follow`、`RelationStats`、`Friendship`、`OutboxEvent`）、仓储接口契约与领域错误常量；保持零外部依赖 | `TODO` |
-| **M4-03** | 视频点赞原子一致性与「我点赞的视频」流实现 | M4-01, M4-02 | 在 `internal/infra/persistence/interaction` 基于 GORM 实现点赞仓储；采用 `INSERT ... ON DUPLICATE KEY UPDATE` 与 `DELETE`，根据 `RowsAffected == 1` 驱动原子加减 `video_stats.like_count`（`GREATEST` 防负数）；单事务内写入 `interaction.liked/unliked` 的 Outbox 记录；实现「我点赞的视频」基于 `likes.id < cursor` 倒序游标分页查询（关联查询有效视频列表）；实现批量点赞探测 `BatchIsLiked` | `TODO` |
-| **M4-04** | 评论发布幂等性、回复层级与热评/最新排序实现 | M4-01, M4-02 | 在 `internal/infra/persistence/interaction` 实现评论仓储；基于 `UNIQUE(user_id, idempotency_key)` 唯一键拦截请求重放，命中时幂等返回原有评论；单事务内原子自增 `video_stats.comment_count` 并写 Outbox；支持一级评论与二级单层回复；实现作者删除评论（原子递减 `comment_count`，状态置为已删除）；实现评论点赞/取消点赞与 `comments.like_count` 原子更新；支持评论列表按最新（`id < cursor`）与按热评（`(like_count, id) < (cursor_like_count, cursor_id)`）复合游标分页 | `TODO` |
-| **M4-05** | 关注关系、统计维护与互粉好友状态判定 | M4-01, M4-02 | 在 `internal/infra/persistence/relation` 实现关注仓储；自关注校验拦截；单事务内通过 `RowsAffected` 驱动原子维护 `relation_stats`（关注者的 `following_count` 与被关注者的 `follower_count`），同时写入 `relation.followed/unfollowed` Outbox 记录；实现关注列表与粉丝列表单调 ID 游标分页（`follows.id < cursor`）；实现双方关注关系探测与互粉好友判定（`is_friend = is_following && is_follower`）；实现批量关注态探测 `BatchIsFollowed` | `TODO` |
+| **M4-01** | 互动、关系与本地消息表迁移脚本 | M0-05 | 编写 `000005_create_interaction_tables`、`000006_create_relation_tables` 与 `000007_create_outbox_tables`；通过 `migrate up` 与 `migrate down` 回滚验证；CI 历史不变性校验绿灯 | `DONE` |
+| **M4-02** | 互动、关系与 Outbox 领域模型契约定义 | — | 在 `internal/domain/interaction`、`internal/domain/relation`、`internal/domain/outbox` 定义核心实体（`Like`、`Comment`、`CommentLike`、`Follow`、`RelationStats`、`Friendship`、`OutboxEvent`）、仓储接口契约与领域错误常量；保持零外部依赖 | `DONE` |
+| **M4-03** | 视频点赞原子一致性与「我点赞的视频」流实现 | M4-01, M4-02 | 在 `internal/infra/persistence/interaction` 基于 GORM 实现点赞仓储；采用 `INSERT ... ON DUPLICATE KEY UPDATE` 与 `DELETE`，根据 `RowsAffected == 1` 驱动原子加减 `video_stats.like_count`（`GREATEST` 防负数）；单事务内写入 `interaction.liked/unliked` 的 Outbox 记录；实现「我点赞的视频」基于 `likes.id < cursor` 倒序游标分页查询（关联查询有效视频列表）；实现批量点赞探测 `BatchIsLiked` | `DONE` |
+| **M4-04** | 评论发布幂等性、回复层级与热评/最新排序实现 | M4-01, M4-02 | 在 `internal/infra/persistence/interaction` 实现评论仓储；基于 `UNIQUE(user_id, idempotency_key)` 唯一键拦截请求重放，命中时幂等返回原有评论；单事务内原子自增 `video_stats.comment_count` 并写 Outbox；支持一级评论与二级单层回复；实现作者删除评论（原子递减 `comment_count`，状态置为已删除）；实现评论点赞/取消点赞与 `comments.like_count` 原子更新；支持评论列表按最新（`id < cursor`）与按热评（`(like_count, id) < (cursor_like_count, cursor_id)`）复合游标分页 | `DONE` |
+| **M4-05** | 关注关系、统计维护与互粉好友状态判定 | M4-01, M4-02 | 在 `internal/infra/persistence/relation` 实现关注仓储；自关注校验拦截；单事务内通过 `RowsAffected` 驱动原子维护 `relation_stats`（关注者的 `following_count` 与被关注者的 `follower_count`），同时写入 `relation.followed/unfollowed` Outbox 记录；实现关注列表与粉丝列表单调 ID 游标分页（`follows.id < cursor`）；实现双方关注关系探测与互粉好友判定（`is_friend = is_following && is_follower`）；实现批量关注态探测 `BatchIsFollowed` | `DONE` |
 | **M4-06** | Outbox 事务本地消息表与分布式租约调度器 | M4-01, M4-02 | 在 `internal/infra/persistence/outbox` 与 `internal/infra/outbox` 实现调度器：实现抢占式租约领取（生成实例 UUID `lease_token`，原子更新 `status='sending', lease_until=NOW()+30s, attempts=attempts+1`，单次提取 100 条）；实现过期租约自动回收（`status='sending' AND lease_until < NOW()` 重置为 `pending`）；失败时按指数退避计算 `next_retry_at`（1s/5s/25s/2m/10m）；超过 10 次置为 `dead`；提供定时调度循环与优雅退出控制 | `TODO` |
 | **M4-07** | RabbitMQ 投递集成与消费端事务去重框架 | M0-06, M4-06 | 封装 RabbitMQ 发布器（开启 Confirm 确认，收到 ACK 后原子更新 Outbox 为 `sent`）；定义交换机 `exchange.gorangefeed.events`（Topic 模式）与持久化队列；实现消费者通用去重中间件/基类：在 MySQL 事务中首行执行 `INSERT INTO consumed_events (event_id) VALUES (?)`，主键冲突直接回滚跳过，保障 At-least-once 投递下的 Exactly-once 语义；注册并挂载事件消费者路由 | `TODO` |
 | **M4-08** | 关注流推拉结合（Hybrid Push-Pull）分发与读聚合 | M4-05, M4-07, M3-02 | 1. **写扩散**：Worker 消费 `video.published` 事件，若作者粉丝数 `< 5000`（普通作者），批量分片将 `video_id` 写入所有粉丝 Redis Inbox ZSet `feed:following:inbox:{uid}`（score=video.id，保留最新 800 条裁剪）；若粉丝数 `≥ 5000`（大 V 作者），仅写入作者专有 Outbox ZSet `feed:following:author:{author_id}`；<br>2. **读聚合**：在 `internal/service/feed` 增加 `ListFollowingFeed`，Pipeline 并行读取用户 Inbox ZSet 和关注的所有大 V 的 Outbox ZSet，内存中基于优先队列多路归并排序并游标裁剪；若 Redis 为空或冷启动，平滑降级执行 MySQL 关联查询兜底，并异步触发 Inbox 预热 | `TODO` |
