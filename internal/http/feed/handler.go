@@ -112,3 +112,72 @@ func (h *Handler) RecordView(c *gin.Context) {
 
 	response.OK(c, gin.H{"message": "view recorded successfully"})
 }
+
+// GetFollowingFeed handles GET /api/v1/feed/following.
+// Retrieves the personalized following feed using hybrid push-pull multi-way merge.
+func (h *Handler) GetFollowingFeed(c *gin.Context) {
+	viewerID := c.GetInt64(middleware.ContextKeyUserID)
+	if viewerID <= 0 {
+		response.Fail(c, response.ErrUnauthorized("Authentication required"))
+		return
+	}
+
+	cursorStr := c.DefaultQuery("cursor", "0")
+	cursor, err := strconv.ParseInt(cursorStr, 10, 64)
+	if err != nil || cursor < 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid cursor"))
+		return
+	}
+
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid limit"))
+		return
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	page, err := h.svc.ListFollowingFeed(c.Request.Context(), viewerID, cursor, limit)
+	if err != nil {
+		if errors.Is(err, domainfeed.ErrInvalidCursor) || errors.Is(err, domainfeed.ErrInvalidLimit) {
+			response.Fail(c, response.ErrInvalidParam(err.Error()))
+			return
+		}
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, page)
+}
+
+// GetLikeRankFeed handles GET /api/v1/feed/like-rank.
+// Retrieves videos ordered by historical like count using composite cursor pagination.
+func (h *Handler) GetLikeRankFeed(c *gin.Context) {
+	viewerID := c.GetInt64(middleware.ContextKeyUserID)
+
+	cursor := strings.TrimSpace(c.DefaultQuery("cursor", ""))
+
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid limit"))
+		return
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	page, err := h.svc.GetLikeRankFeed(c.Request.Context(), viewerID, cursor, limit)
+	if err != nil {
+		if errors.Is(err, domainfeed.ErrInvalidCursor) || errors.Is(err, domainfeed.ErrInvalidLimit) {
+			response.Fail(c, response.ErrInvalidParam(err.Error()))
+			return
+		}
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, page)
+}

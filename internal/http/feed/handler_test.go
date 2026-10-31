@@ -15,8 +15,10 @@ import (
 )
 
 type mockFeedService struct {
-	getGlobalFeedFn func(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
-	recordViewFn    func(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
+	getGlobalFeedFn     func(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
+	recordViewFn        func(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
+	listFollowingFeedFn func(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
+	getLikeRankFeedFn   func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error)
 }
 
 func (m *mockFeedService) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
@@ -42,10 +44,16 @@ func (m *mockFeedService) SyncFloorAndTrim(ctx context.Context) (int64, error) {
 }
 
 func (m *mockFeedService) ListFollowingFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
+	if m.listFollowingFeedFn != nil {
+		return m.listFollowingFeedFn(ctx, viewerID, cursor, limit)
+	}
 	return &domainfeed.FeedPage{Items: []*domainfeed.FeedItem{}}, nil
 }
 
 func (m *mockFeedService) GetLikeRankFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error) {
+	if m.getLikeRankFeedFn != nil {
+		return m.getLikeRankFeedFn(ctx, viewerID, cursor, limit)
+	}
 	return &domainfeed.LikeRankPage{Items: []*domainfeed.FeedItem{}}, nil
 }
 
@@ -55,6 +63,8 @@ func setupTestEngine(svc *mockFeedService) *gin.Engine {
 	handler := httpfeed.NewHandler(svc)
 
 	r.GET("/api/v1/feed/global", handler.GetGlobalFeed)
+	r.GET("/api/v1/feed/following", handler.GetFollowingFeed)
+	r.GET("/api/v1/feed/like-rank", handler.GetLikeRankFeed)
 	r.POST("/api/v1/videos/:videoId/view", handler.RecordView)
 	return r
 }
@@ -164,3 +174,102 @@ func TestHandler_RecordView(t *testing.T) {
 		t.Fatalf("expected 400 for bad videoId, got %d", wBadID.Code)
 	}
 }
+
+func TestHandler_GetFollowingFeed(t *testing.T) {
+	mockSvc := &mockFeedService{
+		listFollowingFeedFn: func(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
+			if viewerID != 1001 {
+				t.Fatalf("expected viewerID=1001, got %d", viewerID)
+			}
+			return &domainfeed.FeedPage{
+				Items: []*domainfeed.FeedItem{
+					{ID: 201, Title: "Following Video 1"},
+				},
+				NextCursor: 201,
+				HasMore:    true,
+			}, nil
+		},
+	}
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	handler := httpfeed.NewHandler(mockSvc)
+
+	// Inject viewerID simulating JWTAuth
+	r.GET("/api/v1/feed/following", func(c *gin.Context) {
+		if auth := c.GetHeader("Authorization"); auth == "Bearer valid" {
+			c.Set("user_id", int64(1001))
+		}
+		handler.GetFollowingFeed(c)
+	})
+
+	// 1. Authorized request -> 200 OK
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/following?cursor=0&limit=10", nil)
+	req.Header.Set("Authorization", "Bearer valid")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp response.Response
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	dataMap := resp.Data.(map[string]interface{})
+	items := dataMap["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	// 2. Unauthorized request -> 401
+	reqUnauth, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/following", nil)
+	wUnauth := httptest.NewRecorder()
+	r.ServeHTTP(wUnauth, reqUnauth)
+
+	if wUnauth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 Unauthorized, got %d", wUnauth.Code)
+	}
+
+	// 3. Bad cursor -> 400
+	reqBadCursor, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/following?cursor=-1", nil)
+	reqBadCursor.Header.Set("Authorization", "Bearer valid")
+	wBadCursor := httptest.NewRecorder()
+	r.ServeHTTP(wBadCursor, reqBadCursor)
+
+	if wBadCursor.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d", wBadCursor.Code)
+	}
+}
+
+func TestHandler_GetLikeRankFeed(t *testing.T) {
+	mockSvc := &mockFeedService{
+		getLikeRankFeedFn: func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error) {
+			return &domainfeed.LikeRankPage{
+				Items: []*domainfeed.FeedItem{
+					{ID: 301, Title: "Top Liked Video"},
+				},
+				NextCursor: "500_301",
+				HasMore:    true,
+			}, nil
+		},
+	}
+
+	engine := setupTestEngine(mockSvc)
+
+	// 1. Get like rank feed -> 200 OK
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/like-rank?cursor=1000_50&limit=5", nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp response.Response
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	dataMap := resp.Data.(map[string]interface{})
+	if dataMap["next_cursor"] != "500_301" {
+		t.Fatalf("expected next_cursor=500_301, got %v", dataMap["next_cursor"])
+	}
+}
+

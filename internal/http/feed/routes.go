@@ -12,12 +12,15 @@ import (
 func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenStore domainaccount.TokenStore, rdb *redis.Client) {
 	v1 := r.Group("/api/v1")
 
+	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
 	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
 
-	// Global feed endpoint with SoftJWTAuth (supports anonymous visitors and logged-in viewers)
+	// Feed endpoints (global, following, like-rank)
 	feedGroup := v1.Group("/feed")
 	{
 		feedGroup.GET("/global", softAuth, h.GetGlobalFeed)
+		feedGroup.GET("/following", jwtAuth, h.GetFollowingFeed)
+		feedGroup.GET("/like-rank", softAuth, h.GetLikeRankFeed)
 	}
 
 	// Playback view reporting endpoint (FR-VID-08)

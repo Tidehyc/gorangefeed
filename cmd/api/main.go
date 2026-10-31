@@ -14,6 +14,8 @@ import (
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
+	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
+	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
@@ -22,6 +24,8 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
+	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
@@ -30,6 +34,8 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
+	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
+	servicerelation "github.com/Tidehyc/gorangefeed/internal/service/relation"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
 )
@@ -107,14 +113,26 @@ func main() {
 	uploadSvc := serviceupload.NewService(uploadSessionRepo, uploadBitmapStore, uploadMergeLocker, chunkStorage)
 	uploadHandler := httpupload.NewHandler(uploadSvc)
 
-	// 7. Assemble Feed Domain & Caches
+	// 7. Assemble Interaction & Relation Domains
+	interactionRepo := persistenceinteraction.NewRepository(db)
+	relationRepo := persistencerelation.NewRepository(db)
+	interactionSvc := serviceinteraction.NewService(interactionRepo, videoRepo, accountRepo)
+	relationSvc := servicerelation.NewService(relationRepo, accountRepo)
+	interactionHandler := httpinteraction.NewHandler(interactionSvc)
+	relationHandler := httprelation.NewHandler(relationSvc)
+
+	// 8. Assemble Feed Domain & Caches
+	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
 	timelineRepo := persistencefeed.NewTimelineStore(rdb)
 	pageCache := persistencefeed.NewPageCacheRepository(rdb)
 	cardCache := persistencefeed.NewCardCacheRepository(rdb)
 	statCache := persistencefeed.NewStatCacheRepository(rdb)
 	exposureRepo := persistencefeed.NewExposureRepository(rdb)
 	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
-	feedSvc := servicefeed.NewService(timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo)
+	feedSvc := servicefeed.NewService(
+		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
+		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
+	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
 	// Hook into video publishing to append published videos to timeline
@@ -124,7 +142,7 @@ func main() {
 		}
 	})
 
-	// 8. Construct Router with probe checks
+	// 9. Construct Router with probe checks
 	engine := router.NewRouter(router.DependencyChecks{
 		CheckMySQL: func(ctx context.Context) error {
 			return mysql.Ping(ctx, db)
@@ -143,6 +161,8 @@ func main() {
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
 	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
+	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
+	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
