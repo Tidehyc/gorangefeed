@@ -109,4 +109,21 @@ func TestGormOutboxRepository_ClaimAndLifecycle(t *testing.T) {
 	if m.Status != string(domainoutbox.StatusSent) {
 		t.Errorf("expected status sent, got %s", m.Status)
 	}
+
+	// 5. Verify CountByStatus
+	sentCount, err := repo.CountByStatus(ctx, domainoutbox.StatusSent)
+	if err != nil {
+		t.Fatalf("CountByStatus sent failed: %v", err)
+	}
+	if sentCount < 1 {
+		t.Errorf("expected at least 1 sent event, got %d", sentCount)
+	}
+
+	pendingCount, err := repo.CountByStatus(ctx, domainoutbox.StatusPending)
+	if err != nil {
+		t.Fatalf("CountByStatus pending failed: %v", err)
+	}
+	if pendingCount != 0 {
+		t.Errorf("expected 0 pending events, got %d", pendingCount)
+	}
 }

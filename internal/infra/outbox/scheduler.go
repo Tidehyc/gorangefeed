@@ -168,6 +168,7 @@ func (s *Scheduler) PollAndDispatch(ctx context.Context) (int, error) {
 func (s *Scheduler) dispatchEvent(ctx context.Context, event *domainoutbox.Event) error {
 	pubErr := s.publisher.Publish(ctx, event)
 	if pubErr == nil {
+		outboxDispatchedTotal.Inc()
 		// Delivery successful -> mark as sent
 		if err := s.repo.MarkSent(ctx, event.EventID); err != nil {
 			return fmt.Errorf("failed to mark sent for event %s: %w", event.EventID, err)
@@ -177,6 +178,12 @@ func (s *Scheduler) dispatchEvent(ctx context.Context, event *domainoutbox.Event
 
 	// Delivery failed -> calculate backoff and schedule retry or mark dead
 	backoff, dead := CalculateBackoff(event.Attempts, s.cfg.MaxAttempts)
+	if dead {
+		outboxDeadTotal.Inc()
+	} else {
+		outboxRetriedTotal.Inc()
+	}
+
 	nextRetry := time.Now().Add(backoff)
 	if err := s.repo.MarkFailedWithBackoff(ctx, event.EventID, nextRetry, pubErr.Error(), dead); err != nil {
 		return fmt.Errorf("failed to mark backoff for event %s: %w", event.EventID, err)
@@ -190,6 +197,9 @@ func (s *Scheduler) ReclaimExpired(ctx context.Context) (int64, error) {
 	reclaimed, err := s.repo.ReclaimExpiredLeases(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reclaim expired outbox leases: %w", err)
+	}
+	if count, err := s.repo.CountByStatus(ctx, domainoutbox.StatusPending); err == nil {
+		outboxBacklogGauge.Set(float64(count))
 	}
 	return reclaimed, nil
 }

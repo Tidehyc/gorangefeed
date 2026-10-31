@@ -22,4 +22,7 @@ type Repository interface {
 
 	// MarkFailedWithBackoff schedules a retry with exponential backoff or marks as dead if max attempts exceeded.
 	MarkFailedWithBackoff(ctx context.Context, eventID string, nextRetry time.Time, lastErr string, dead bool) error
+
+	// CountByStatus returns the number of events currently in the given status.
+	CountByStatus(ctx context.Context, status Status) (int64, error)
 }

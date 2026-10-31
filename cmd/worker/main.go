@@ -15,11 +15,15 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
+	"github.com/Tidehyc/gorangefeed/internal/infra/outbox"
+	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
+	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
-	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func main() {
@@ -125,31 +129,73 @@ func main() {
 		}
 	}()
 
-	// Background worker loop placeholder (will house Outbox dispatcher and MQ consumers in M4/M5)
+	// 7. Initialize Outbox Lease Scheduler
+	outboxRepo := persistenceoutbox.NewRepository(db)
+	outboxPublisher, err := rabbitmq.NewPublisher(mqConn, rabbitmq.ExchangeEvents)
+	if err != nil {
+		l.Error("worker failed to initialize rabbitmq publisher", "error", err)
+		os.Exit(1)
+	}
+	outboxScheduler, err := outbox.NewScheduler(outboxRepo, outboxPublisher)
+	if err != nil {
+		l.Error("worker failed to initialize outbox scheduler", "error", err)
+		os.Exit(1)
+	}
+	if err := outboxScheduler.Start(ctx); err != nil {
+		l.Error("worker failed to start outbox scheduler", "error", err)
+		os.Exit(1)
+	}
+	l.Info("outbox scheduler started successfully")
+
+	// 8. Initialize RabbitMQ Consumer for Following Feed Fanout
+	deduplicator := rabbitmq.NewDeduplicator(db)
+	relationRepo := persistencerelation.NewRepository(db)
+	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
+	fanoutSvc, err := servicefeed.NewFanoutService(relationRepo, followingRepo, deduplicator)
+	if err != nil {
+		l.Error("worker failed to initialize fanout service", "error", err)
+		os.Exit(1)
+	}
+
+	followingConsumer, err := rabbitmq.NewConsumer(
+		mqConn,
+		rabbitmq.ExchangeEvents,
+		rabbitmq.QueueFollowingFeed,
+		[]string{rabbitmq.RoutingKeyVideoPublished},
+		20,
+	)
+	if err != nil {
+		l.Error("worker failed to initialize following consumer", "error", err)
+		os.Exit(1)
+	}
+
 	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				l.Info("worker loop exiting")
-				return
-			case <-ticker.C:
-				l.Debug("worker heartbeat tick")
+		l.Info("starting following feed consumer", "queue", rabbitmq.QueueFollowingFeed)
+		err := followingConsumer.Start(ctx, func(msgCtx context.Context, d amqp.Delivery) error {
+			eventID := d.MessageId
+			if eventID == "" {
+				if val, ok := d.Headers["event_id"].(string); ok {
+					eventID = val
+				}
 			}
+			return fanoutSvc.HandleVideoPublished(msgCtx, eventID, d.Body)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			l.Error("following feed consumer encountered error", "error", err)
 		}
 	}()
 
-	l.Info("Worker service running and ready for event dispatching")
+	l.Info("Worker service running and ready for event dispatching and consumption")
 
-	// 6. Signal handling for graceful shutdown
+	// 9. Signal handling for graceful shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	l.Info("worker received termination signal", "signal", sig.String())
 
-	// 7. Stop worker processing and shutdown metrics server
+	// 10. Stop worker processing and outbox scheduler
 	stopWorker()
+	outboxScheduler.Stop()
 
 	metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer metricsCancel()

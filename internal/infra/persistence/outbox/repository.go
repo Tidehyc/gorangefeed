@@ -138,3 +138,14 @@ func (r *gormRepository) MarkFailedWithBackoff(ctx context.Context, eventID stri
 	}
 	return nil
 }
+
+func (r *gormRepository) CountByStatus(ctx context.Context, status domainoutbox.Status) (int64, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&OutboxModel{}).
+		Where("status = ?", string(status)).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("failed to count outbox events by status %s: %w", status, err)
+	}
+	return count, nil
+}

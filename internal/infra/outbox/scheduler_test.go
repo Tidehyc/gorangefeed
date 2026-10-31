@@ -91,6 +91,18 @@ func (m *mockOutboxRepo) MarkFailedWithBackoff(ctx context.Context, eventID stri
 	return nil
 }
 
+func (m *mockOutboxRepo) CountByStatus(ctx context.Context, status domainoutbox.Status) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var count int64
+	for _, e := range m.events {
+		if e.Status == status {
+			count++
+		}
+	}
+	return count, nil
+}
+
 type mockPublisher struct {
 	mu           sync.Mutex
 	publishedIDs []string
