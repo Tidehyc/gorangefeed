@@ -49,6 +49,12 @@ type StatCacheRepository interface {
 	InvalidateStat(ctx context.Context, videoID int64) error
 }
 
+// LikeRankVideo represents a video ID and its accumulated like count for ranking.
+type LikeRankVideo struct {
+	VideoID   int64
+	LikeCount int64
+}
+
 // FeedDBRepository queries MySQL for persistent fallback and cold data.
 type FeedDBRepository interface {
 	// ListColdVideos queries published videos older than cursor from MySQL.
@@ -63,6 +69,8 @@ type FeedDBRepository interface {
 	CalculateFloor(ctx context.Context, duration time.Duration) (int64, error)
 	// IncrViewCount increments the view count for a video atomically in MySQL.
 	IncrViewCount(ctx context.Context, videoID int64) error
+	// ListLikeRankVideos queries published videos ordered by like_count DESC, id DESC.
+	ListLikeRankVideos(ctx context.Context, cursorLikeCount, cursorVideoID int64, limit int) ([]*LikeRankVideo, error)
 }
 
 // ExposureRepository stores client exposure impressions to prevent repeated recommendations.

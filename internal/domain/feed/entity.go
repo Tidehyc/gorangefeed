@@ -1,6 +1,8 @@
 package feed
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -13,6 +15,7 @@ const (
 	SceneFollowing Scene = "following"
 	SceneHot       Scene = "hot"
 	SceneRecommend Scene = "recommend"
+	SceneLikeRank  Scene = "like_rank"
 
 	DefaultScene = SceneGlobal
 )
@@ -43,7 +46,7 @@ const (
 func NormalizeScene(scene string) Scene {
 	s := strings.TrimSpace(strings.ToLower(scene))
 	switch Scene(s) {
-	case SceneGlobal, SceneFollowing, SceneHot, SceneRecommend:
+	case SceneGlobal, SceneFollowing, SceneHot, SceneRecommend, SceneLikeRank:
 		return Scene(s)
 	default:
 		return DefaultScene
@@ -100,6 +103,48 @@ type FeedPage struct {
 	Items      []*FeedItem `json:"items"`
 	NextCursor int64       `json:"next_cursor"`
 	HasMore    bool        `json:"has_more"`
+}
+
+// LikeRankCursor represents a composite cursor for like count ranking.
+type LikeRankCursor struct {
+	LikeCount int64 `json:"like_count"`
+	VideoID   int64 `json:"video_id"`
+}
+
+// LikeRankPage represents a paginated list of feed items ordered by like count.
+type LikeRankPage struct {
+	Items      []*FeedItem `json:"items"`
+	NextCursor string      `json:"next_cursor"`
+	HasMore    bool        `json:"has_more"`
+}
+
+// EncodeLikeRankCursor encodes likeCount and videoID into a cursor string.
+func EncodeLikeRankCursor(likeCount, videoID int64) string {
+	if likeCount <= 0 && videoID <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d_%d", likeCount, videoID)
+}
+
+// DecodeLikeRankCursor decodes a like rank cursor string into likeCount and videoID.
+func DecodeLikeRankCursor(cursor string) (likeCount, videoID int64, err error) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" || cursor == "0" {
+		return 0, 0, nil
+	}
+	parts := strings.Split(cursor, "_")
+	if len(parts) != 2 {
+		return 0, 0, ErrInvalidCursor
+	}
+	likeCount, err = strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || likeCount < 0 {
+		return 0, 0, ErrInvalidCursor
+	}
+	videoID, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || videoID < 0 {
+		return 0, 0, ErrInvalidCursor
+	}
+	return likeCount, videoID, nil
 }
 
 // CachedPage stores lightweight page results in L1 cache for zero-stampede serving.

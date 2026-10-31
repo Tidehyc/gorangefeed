@@ -256,3 +256,40 @@ func (r *feedDBRepository) fetchStats(ctx context.Context, videoIDs []int64) map
 	}
 	return statMap
 }
+
+func (r *feedDBRepository) ListLikeRankVideos(ctx context.Context, cursorLikeCount, cursorVideoID int64, limit int) ([]*domainfeed.LikeRankVideo, error) {
+	if limit <= 0 {
+		limit = domainfeed.DefaultLimit
+	}
+
+	type result struct {
+		VideoID   int64 `gorm:"column:video_id"`
+		LikeCount int64 `gorm:"column:like_count"`
+	}
+
+	var rows []result
+	query := r.db.WithContext(ctx).Table("videos v").
+		Select("v.id AS video_id, s.like_count AS like_count").
+		Joins("INNER JOIN video_stats s ON v.id = s.video_id").
+		Where("v.status = ?", 1)
+
+	if cursorLikeCount > 0 || cursorVideoID > 0 {
+		query = query.Where("s.like_count < ? OR (s.like_count = ? AND v.id < ?)", cursorLikeCount, cursorLikeCount, cursorVideoID)
+	}
+
+	err := query.Order("s.like_count DESC, v.id DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to query like rank videos: %w", err)
+	}
+
+	res := make([]*domainfeed.LikeRankVideo, len(rows))
+	for i, row := range rows {
+		res[i] = &domainfeed.LikeRankVideo{
+			VideoID:   row.VideoID,
+			LikeCount: row.LikeCount,
+		}
+	}
+	return res, nil
+}

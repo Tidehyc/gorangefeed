@@ -20,6 +20,8 @@ type Service interface {
 	GetGlobalFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
 	// ListFollowingFeed retrieves a page of the following feed using hybrid push-pull multi-way merge sort.
 	ListFollowingFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
+	// GetLikeRankFeed retrieves videos ordered by historical like count using composite cursor.
+	GetLikeRankFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error)
 	// RecordView reports a video playback or exposure impression, incrementing view count and updating exposure history.
 	RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
 	// AppendTimeline appends a newly published video to the Redis timeline.
@@ -92,11 +94,9 @@ func (s *service) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int6
 		limit = domainfeed.MaxLimit
 	}
 
-	viewerKey := "anon"
-	if viewerID > 0 {
-		viewerKey = fmt.Sprintf("uid:%d", viewerID)
-	}
-	cacheKey := fmt.Sprintf("feed:page:global:%s:%d:%d:v1", viewerKey, cursor, limit)
+	// M4-09 Architecture Evolution: L1 page cache stores shared public pure-ID skeleton.
+	// All visitors (anon and logged-in) share the exact same L1 key and Singleflight across platform.
+	cacheKey := fmt.Sprintf("feed:page:global:public:%d:%d:v1", cursor, limit)
 
 	// 1. Try reading from L1 Page Cache
 	if s.pageCache != nil {
@@ -104,7 +104,7 @@ func (s *service) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int6
 		if err == nil && found && cachedPage != nil {
 			now := time.Now()
 			if !cachedPage.IsExpired(now) {
-				// L1 Cache Hit: Return immediately with hydrated items
+				// L1 Cache Hit: Return immediately with dynamic hydrated items
 				return s.hydrateFeedPage(ctx, cachedPage, viewerID)
 			}
 			if cachedPage.CanServeStale(now) {
@@ -113,7 +113,7 @@ func (s *service) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int6
 					bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					_, _, _ = s.sfGroup.Do(cacheKey, func() (interface{}, error) {
-						return s.buildAndCachePage(bgCtx, viewerKey, cacheKey, cursor, limit)
+						return s.buildAndCachePage(bgCtx, cacheKey, cursor, limit)
 					})
 				}()
 				return s.hydrateFeedPage(ctx, cachedPage, viewerID)
@@ -123,7 +123,7 @@ func (s *service) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int6
 
 	// 2. L1 Cache Miss: Execute singleflight deduplication across concurrent requests
 	val, err, _ := s.sfGroup.Do(cacheKey, func() (interface{}, error) {
-		return s.buildAndCachePage(ctx, viewerKey, cacheKey, cursor, limit)
+		return s.buildAndCachePage(ctx, cacheKey, cursor, limit)
 	})
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (s *service) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int6
 	return s.hydrateFeedPage(ctx, cachedPage, viewerID)
 }
 
-func (s *service) buildAndCachePage(ctx context.Context, viewerKey, cacheKey string, cursor int64, limit int) (*domainfeed.CachedPage, error) {
+func (s *service) buildAndCachePage(ctx context.Context, cacheKey string, cursor int64, limit int) (*domainfeed.CachedPage, error) {
 	// Retrieve floor boundary
 	var floor int64
 	var floorErr error
@@ -536,11 +536,26 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 		}
 	}
 
-	// 3. Query viewer interaction (IsLiked) if available
+	// 3. Query viewer interaction (IsLiked & IsFollowed) if available
 	likedMap := make(map[int64]bool)
 	if viewerID > 0 && s.interactionRepo != nil {
 		if m, err := s.interactionRepo.BatchIsLiked(ctx, viewerID, videoIDs); err == nil {
 			likedMap = m
+		}
+	}
+
+	followedMap := make(map[int64]bool)
+	if viewerID > 0 && s.relationRepo != nil && !isFollowed {
+		authorIDs := make([]int64, 0, len(videoIDs))
+		for _, id := range videoIDs {
+			if c, ok := cardMap[id]; ok && c != nil {
+				authorIDs = append(authorIDs, c.AuthorID)
+			}
+		}
+		if len(authorIDs) > 0 {
+			if m, err := s.relationRepo.BatchIsFollowed(ctx, viewerID, authorIDs); err == nil {
+				followedMap = m
+			}
 		}
 	}
 
@@ -557,6 +572,11 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 			stat = *st
 		}
 
+		itemFollowed := isFollowed
+		if !itemFollowed && viewerID > 0 {
+			itemFollowed = followedMap[card.AuthorID]
+		}
+
 		items = append(items, &domainfeed.FeedItem{
 			ID:          id,
 			AuthorID:    card.AuthorID,
@@ -569,11 +589,57 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 			Author:      card.Author,
 			Stats:       stat,
 			IsLiked:     likedMap[id],
-			IsFollowed:  isFollowed,
+			IsFollowed:  itemFollowed,
 		})
 	}
 
 	return items, nil
+}
+
+func (s *service) GetLikeRankFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error) {
+	cursorLikeCount, cursorVideoID, err := domainfeed.DecodeLikeRankCursor(cursor)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = domainfeed.DefaultLimit
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	if s.dbRepo == nil {
+		return nil, errors.New("db repository not configured")
+	}
+
+	videos, err := s.dbRepo.ListLikeRankVideos(ctx, cursorLikeCount, cursorVideoID, limit+1)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query like rank feed: %w", err)
+	}
+
+	hasMore := len(videos) > limit
+	var nextCursor string
+	if hasMore {
+		nextItem := videos[limit-1]
+		nextCursor = domainfeed.EncodeLikeRankCursor(nextItem.LikeCount, nextItem.VideoID)
+		videos = videos[:limit]
+	}
+
+	videoIDs := make([]int64, len(videos))
+	for i, v := range videos {
+		videoIDs[i] = v.VideoID
+	}
+
+	items, err := s.hydrateVideoIDs(ctx, videoIDs, viewerID, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate like rank items: %w", err)
+	}
+
+	return &domainfeed.LikeRankPage{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	}, nil
 }
 
 func (s *service) RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error {
@@ -612,8 +678,9 @@ func (s *service) AppendTimeline(ctx context.Context, videoID int64) error {
 		}
 	}
 	if s.pageCache != nil {
-		_ = s.pageCache.DeletePage(ctx, "feed:page:global:anon:0:10:v1")
-		_ = s.pageCache.DeletePage(ctx, "feed:page:global:anon:0:3:v1")
+		_ = s.pageCache.DeletePage(ctx, "feed:page:global:public:0:10:v1")
+		_ = s.pageCache.DeletePage(ctx, "feed:page:global:public:0:3:v1")
+		_ = s.pageCache.DeletePage(ctx, "feed:page:global:public:0:2:v1")
 	}
 	return nil
 }

@@ -45,6 +45,9 @@ func (m *mockFeedDBForFollowing) CalculateFloor(ctx context.Context, duration ti
 func (m *mockFeedDBForFollowing) IncrViewCount(ctx context.Context, videoID int64) error {
 	return nil
 }
+func (m *mockFeedDBForFollowing) ListLikeRankVideos(ctx context.Context, cursorLikeCount, cursorVideoID int64, limit int) ([]*domainfeed.LikeRankVideo, error) {
+	return nil, nil
+}
 
 func TestService_ListFollowingFeed_Validation(t *testing.T) {
 	svc := NewService(nil, nil, nil, nil, nil, nil)

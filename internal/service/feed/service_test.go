@@ -226,13 +226,16 @@ func (m *mockDBRepo) IncrViewCount(ctx context.Context, videoID int64) error {
 	m.viewCounts[videoID]++
 	return nil
 }
+func (m *mockDBRepo) ListLikeRankVideos(ctx context.Context, cursorLikeCount, cursorVideoID int64, limit int) ([]*domainfeed.LikeRankVideo, error) {
+	return nil, nil
+}
 
 func TestFeedService_GetGlobalFeed_L1HitAndStale(t *testing.T) {
 	ctx := context.Background()
 
 	pageCache := &mockPageCache{
 		pages: map[string]*domainfeed.CachedPage{
-			"feed:page:global:anon:0:10:v1": {
+			"feed:page:global:public:0:10:v1": {
 				VideoIDs:   []int64{101, 102},
 				NextCursor: 102,
 				HasMore:    true,
@@ -272,7 +275,7 @@ func TestFeedService_GetGlobalFeed_L1HitAndStale(t *testing.T) {
 	}
 
 	// 2. Stale L1 Hit
-	pageCache.pages["feed:page:global:anon:0:10:v1"].ExpireAt = time.Now().Add(-5 * time.Second) // soft expired, within 30s
+	pageCache.pages["feed:page:global:public:0:10:v1"].ExpireAt = time.Now().Add(-5 * time.Second) // soft expired, within 30s
 	pageStale, err := svc.GetGlobalFeed(ctx, 0, 0, 10)
 	if err != nil {
 		t.Fatalf("expected no error on stale L1 hit, got %v", err)

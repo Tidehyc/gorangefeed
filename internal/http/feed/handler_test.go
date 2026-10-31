@@ -45,6 +45,10 @@ func (m *mockFeedService) ListFollowingFeed(ctx context.Context, viewerID int64,
 	return &domainfeed.FeedPage{Items: []*domainfeed.FeedItem{}}, nil
 }
 
+func (m *mockFeedService) GetLikeRankFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error) {
+	return &domainfeed.LikeRankPage{Items: []*domainfeed.FeedItem{}}, nil
+}
+
 func setupTestEngine(svc *mockFeedService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
