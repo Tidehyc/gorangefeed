@@ -19,6 +19,7 @@ import (
 	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
+	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
@@ -26,6 +27,7 @@ import (
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
+	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
 	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
 	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
@@ -180,14 +182,16 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 }
 
 type e2eExtendedCtx struct {
-	Engine        *gin.Engine
-	DB            *gorm.DB
-	RDB           *goredis.Client
-	MQConn        *amqp.Connection
-	TempDir       string
+	Engine         *gin.Engine
+	DB             *gorm.DB
+	RDB            *goredis.Client
+	MQConn         *amqp.Connection
+	TempDir        string
+	JWTMgr         *jwt.TokenManager
 	InteractionSvc *serviceinteraction.Service
-	RelationSvc   *servicerelation.Service
-	FeedSvc       servicefeed.Service
+	RelationSvc    *servicerelation.Service
+	FeedSvc        servicefeed.Service
+	OutboxRepo     domainoutbox.Repository
 }
 
 func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
@@ -321,9 +325,11 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		RDB:            rdb,
 		MQConn:         mqConn,
 		TempDir:        tempDir,
+		JWTMgr:         jwtMgr,
 		InteractionSvc: interactionSvc,
 		RelationSvc:    relationSvc,
 		FeedSvc:        feedSvc,
+		OutboxRepo:     persistenceoutbox.NewRepository(db),
 	}, cleanup
 }
 

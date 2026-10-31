@@ -203,7 +203,7 @@ M4 阶段新增 3 组版本化迁移文件，保持表结构与索引设计最�
 | **M4-11** | 互动与关系 HTTP 控制器与全路由装配 | M4-03~05, M4-08~10 | 在 `internal/http/interaction`、`internal/http/relation`、`internal/http/feed` 暴露完整 API；统一响应信封与错误码；参数校验与 JWTAuth / SoftJWTAuth 中间件装配；在 `cmd/api/main.go` 中完成全依赖注入；编写 Handler 单元测试 | `DONE` |
 | **M4-12** | Worker 服务装配与 Outbox 轮询调度器启动 | M4-06, M4-07, M4-08 | 在 `cmd/worker/main.go` 中装配 MySQL、Redis、RabbitMQ，初始化 Outbox 租约抢占调度器、过期租约回收协程、RabbitMQ 事件发布与消费者订阅管道；接入 `/metrics` 导出 Outbox 积压量、派发成功数、重试数与死信报警指标；接入 SIGTERM 信号优雅停机，确保在途事件消费完毕后安全退出 | `DONE` |
 | **M4-13** | M4 端到端互动与推拉流全生命周期 E2E 集成测试 | M4-11, M4-12 | 在 `test/e2e/interaction_lifecycle_test.go` 中编写完整黑盒 E2E 测试集：验证点赞/取消幂等与计数准确性 → 我点赞的视频流倒序游标验证 → 评论幂等防重放与热评排序 → 关注/取关与粉丝统计一致性 → 互粉好友判定断言 → 关注普通作者（写扩散）与关注大 V（读扩散）在关注流中的多路归并排序验证 → 取关后关注流剔除验证 → 全局流 L1 骨架跨登录态共享与个性化点赞/关注态正确注入 → 历史高赞榜复合游标分页测试 | `DONE` |
-| **M4-14** | CP-M4 阶段检查点与高并发数据一致性基准自测 | M4-13 | 验证检查点 CP-M4：Worker 抢占租约杀死模拟（验证 30s 租约过期自动回收恢复为 `pending`）；持续失败 10 次流转为 `dead` 状态；执行并发点赞验证：针对单一视频并发 300 点赞/取消点赞，断言事务执行完毕后 `likes` 记录数与 `video_stats.like_count` 绝对一致，计数零丢失，无负数漂移；执行评论并发幂等验证：50ms 内同一用户携带相同 `idempotency_key` 并发 5 次提交，断言仅生成 1 条评论记录，`comment_count` 仅自增 1 | `TODO` |
+| **M4-14** | CP-M4 阶段检查点与高并发数据一致性基准自测 | M4-13 | 验证检查点 CP-M4：Worker 抢占租约杀死模拟（验证 30s 租约过期自动回收恢复为 `pending`）；持续失败 10 次流转为 `dead` 状态；执行并发点赞验证：针对单一视频并发 300 点赞/取消点赞，断言事务执行完毕后 `likes` 记录数与 `video_stats.like_count` 绝对一致，计数零丢失，无负数漂移；执行评论并发幂等验证：50ms 内同一用户携带相同 `idempotency_key` 并发 5 次提交，断言仅生成 1 条评论记录，`comment_count` 仅自增 1 | `DONE` |
 
 ---
 
