@@ -33,6 +33,9 @@ func (m *mockTimelineRepo) Append(ctx context.Context, videoID int64) error {
 	m.videoIDs = append(m.videoIDs, videoID)
 	return nil
 }
+func (m *mockTimelineRepo) AppendWithSeq(ctx context.Context, videoID int64, seq int64) error {
+	return m.Append(ctx, videoID)
+}
 func (m *mockTimelineRepo) Trim(ctx context.Context, floor int64) error {
 	if m.trimFn != nil {
 		return m.trimFn(floor)

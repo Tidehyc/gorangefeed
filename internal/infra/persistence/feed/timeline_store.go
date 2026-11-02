@@ -68,12 +68,20 @@ func (s *timelineStore) SetFloor(ctx context.Context, floor int64) error {
 }
 
 func (s *timelineStore) Append(ctx context.Context, videoID int64) error {
+	return s.AppendWithSeq(ctx, videoID, videoID)
+}
+
+func (s *timelineStore) AppendWithSeq(ctx context.Context, videoID int64, seq int64) error {
 	if videoID <= 0 {
 		return domainfeed.ErrInvalidVideoID
 	}
+	score := float64(seq)
+	if score <= 0 {
+		score = float64(videoID)
+	}
 	member := strconv.FormatInt(videoID, 10)
 	err := s.rdb.ZAdd(ctx, s.globalKey, redis.Z{
-		Score:  float64(videoID),
+		Score:  score,
 		Member: member,
 	}).Err()
 	if err != nil {

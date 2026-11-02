@@ -41,6 +41,10 @@ func (m *mockFeedService) AppendTimeline(ctx context.Context, videoID int64) err
 	return nil
 }
 
+func (m *mockFeedService) AppendTimelineWithSeq(ctx context.Context, videoID int64, seq int64) error {
+	return nil
+}
+
 func (m *mockFeedService) SyncFloorAndTrim(ctx context.Context) (int64, error) {
 	return 0, nil
 }

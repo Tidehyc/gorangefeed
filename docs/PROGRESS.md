@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **二期架构演进进行中：M7 创作中心数据迁移、领域模型与持久化仓储已通过验收（准备推进 Feat 2: M7-04~06 分布式发号器、定时发布延迟队列与创作中心业务服务）** |
-| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 3 / 8 项（37.5%） · M8~M10 规划中 |
-| **进行中任务** | 推进 M7 Feat 2 (M7-04~06)：落地 Redis 分布式发号器消除时序空洞、实现 ZSet 延迟队列与分布式定时发布调度器、编排创作中心业务服务 |
+| **当前阶段** | **二期架构演进进行中：M7 分布式发号器、定时发布延迟队列与创作中心业务编排已通过验收（准备推进 Feat 3: M7-07 HTTP 控制器与全路由依赖装配）** |
+| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 6 / 8 项（75.0%） · M8~M10 规划中 |
+| **进行中任务** | 推进 M7 Feat 3 (M7-07)：在 internal/http/creator 暴露草稿管理与定时发布接口，在 cmd/api 与 cmd/worker 完成全依赖装配与调度引擎挂载 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M7 Feat 2 (M7-04~06)：在 internal/infra/redis 实现 SequenceGenerator，在 internal/infra/scheduler 实现 DelayedScheduler，在 internal/service/creator 实现 Service |
+| **下一步行动** | 推进 M7 Feat 3 (M7-07)：实现 Creator HTTP Handler，注册 /api/v1/creator/* 路由组，在 cmd/api/main.go 和 cmd/worker/main.go 完成组装 |
 
 
 
@@ -216,9 +216,9 @@
 | **M7-01** | 创作中心数据表迁移与 `publish_seq` 扩展 | M0-05, M2-01 | 编写 `000010_create_creator_and_publish_seq_tables` 迁移脚本；创建 `drafts` 表（`id, author_id, title, description, play_url, cover_url, duration_ms, status, created_at, updated_at`）与 `(author_id, updated_at DESC, id DESC)` 索引；创建 `scheduled_tasks` 表；在 `videos` 表增加 `publish_seq BIGINT NOT NULL DEFAULT 0` 字段与唯一复合索引 `UNIQUE KEY uk_publish_seq (publish_seq)`；通过 migrate up/down 回滚验证 | `DONE` |
 | **M7-02** | 创作中心领域模型与分布式发号器契约定义 | — | 在 `internal/domain/creator` 定义 `Draft` 聚合根、`DraftStatus` 枚举、`ScheduledTask` 实体、`ScheduledStatus` 枚举、`DraftRepository`、`ScheduledTaskRepository` 契约及 `SequenceGenerator` 分布式发号器接口；零外部依赖与单元测试覆盖 | `DONE` |
 | **M7-03** | 草稿箱持久化仓储与游标翻页实现 | M7-01, M7-02 | 在 `internal/infra/persistence/creator` 基于 GORM 实现 `DraftRepository`；实现草稿存、取、改、删与作者数据隔离；实现基于 `(updated_at, id)` 复合游标的分页拉取；实现草稿向正式视频一键发布的原子流转 | `DONE` |
-| **M7-04** | 分布式发号器与时间线时序空洞消除机制 | M0-06, M7-01, M7-02 | 在 `internal/infra/redis` 实现基于 Redis `INCR seq:video:published` 的分布式发号器；改造 Outbox 发布消费端，在视频正式发布瞬间原子申请连续递增的 `publish_seq` 并回写 `videos`；全局时间线 ZSet score 切换为 `publish_seq`，彻底根治长事务提交乱序与延迟发布导致的翻页漏看空洞 | `TODO` |
-| **M7-05** | 定时发布延迟队列与分布式 Worker 抢占调度器 | M0-06, M7-01, M7-02 | 在 `internal/infra/scheduler` 实现基于 Redis ZSet 延迟队列（score 为计划发布 Unix 时间戳）与分布式锁的定时发布调度器；计划到期秒级出队、CAS 状态防重流转、入队 Outbox 触发原子发号发布流程；支持故障重试与节点竞争互斥 | `TODO` |
-| **M7-06** | 创作中心业务服务编排与发布状态机驱动 | M7-03~05 | 在 `internal/service/creator` 实现 `Service`：草稿保存与校验、定时发布计划时间校验（限制未来 5 分钟至 30 天以内）、定时任务取消并退回草稿状态机、联动 `videoRepo` 正式发版；单元测试覆盖 | `TODO` |
+| **M7-04** | 分布式发号器与时间线时序空洞消除机制 | M0-06, M7-01, M7-02 | 在 `internal/infra/redis` 实现基于 Redis `INCR seq:video:published` 的分布式发号器；改造 Outbox 发布消费端，在视频正式发布瞬间原子申请连续递增的 `publish_seq` 并回写 `videos`；全局时间线 ZSet score 切换为 `publish_seq`，彻底根治长事务提交乱序与延迟发布导致的翻页漏看空洞 | `DONE` |
+| **M7-05** | 定时发布延迟队列与分布式 Worker 抢占调度器 | M0-06, M7-01, M7-02 | 在 `internal/infra/scheduler` 实现基于 Redis ZSet 延迟队列（score 为计划发布 Unix 时间戳）与分布式锁的定时发布调度器；计划到期秒级出队、CAS 状态防重流转、入队 Outbox 触发原子发号发布流程；支持故障重试与节点竞争互斥 | `DONE` |
+| **M7-06** | 创作中心业务服务编排与发布状态机驱动 | M7-03~05 | 在 `internal/service/creator` 实现 `Service`：草稿保存与校验、定时发布计划时间校验（限制未来 5 分钟至 30 天以内）、定时任务取消并退回草稿状态机、联动 `videoRepo` 正式发版；单元测试覆盖 | `DONE` |
 | **M7-07** | 创作中心 HTTP 控制器与全路由依赖装配 | M7-06 | 在 `internal/http/creator` 暴露 `POST/GET/PUT/DELETE /api/v1/creator/drafts`、`POST /api/v1/creator/publish-scheduled`、`GET/DELETE /api/v1/creator/scheduled-tasks`；统一响应信封与错误码；在 `cmd/api/main.go` 与 `cmd/worker/main.go` 完成依赖注入与路由/调度引擎挂载；编写 Handler 单测 | `TODO` |
 | **M7-08** | M7 创作中心与高可靠发布时序全生命周期 E2E 集成测试 | M7-07 | 在 `test/e2e/creator_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证草稿增删改查 → 草稿一键发布 → 定时发布排期时间校验拦截 → 定时到期秒级准点自动触发入时间线 → 取消定时发布并回退草稿 → 50 并发发布单调发号严格递增验证 → 乱序提交下的时间线无漏翻页断言 → 并发 Worker 抢占防重复调度断言 → `make vet && make test` 全量绿灯回归 | `TODO` |
 

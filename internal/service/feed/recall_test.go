@@ -44,6 +44,10 @@ func (m *mockTimelineRepoForRecall) Append(ctx context.Context, videoID int64) e
 	return nil
 }
 
+func (m *mockTimelineRepoForRecall) AppendWithSeq(ctx context.Context, videoID int64, seq int64) error {
+	return nil
+}
+
 func (m *mockTimelineRepoForRecall) GetFloor(ctx context.Context) (int64, error) {
 	return 0, nil
 }

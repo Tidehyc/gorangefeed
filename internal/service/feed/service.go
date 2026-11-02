@@ -34,6 +34,8 @@ type Service interface {
 	RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
 	// AppendTimeline appends a newly published video to the Redis timeline.
 	AppendTimeline(ctx context.Context, videoID int64) error
+	// AppendTimelineWithSeq appends a newly published video with monotonic publish sequence.
+	AppendTimelineWithSeq(ctx context.Context, videoID int64, seq int64) error
 	// SyncFloorAndTrim computes the 72h floor from MySQL and trims the Redis timeline atomically.
 	SyncFloorAndTrim(ctx context.Context) (int64, error)
 }
@@ -696,11 +698,15 @@ func (s *service) RecordView(ctx context.Context, viewerID int64, videoID int64,
 }
 
 func (s *service) AppendTimeline(ctx context.Context, videoID int64) error {
+	return s.AppendTimelineWithSeq(ctx, videoID, videoID)
+}
+
+func (s *service) AppendTimelineWithSeq(ctx context.Context, videoID int64, seq int64) error {
 	if videoID <= 0 {
 		return domainfeed.ErrInvalidVideoID
 	}
 	if s.timelineRepo != nil {
-		if err := s.timelineRepo.Append(ctx, videoID); err != nil {
+		if err := s.timelineRepo.AppendWithSeq(ctx, videoID, seq); err != nil {
 			return err
 		}
 	}
