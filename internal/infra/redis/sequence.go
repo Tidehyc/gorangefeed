@@ -47,3 +47,16 @@ func (s *sequenceGenerator) GetCurrentSeq(ctx context.Context) (int64, error) {
 	}
 	return val, nil
 }
+
+func (s *sequenceGenerator) InitializeSequence(ctx context.Context, minVal int64) error {
+	luaScript := `
+		local cur = redis.call('GET', KEYS[1])
+		if not cur or tonumber(cur) < tonumber(ARGV[1]) then
+			redis.call('SET', KEYS[1], ARGV[1])
+			return tonumber(ARGV[1])
+		end
+		return tonumber(cur)
+	`
+	return s.rdb.Eval(ctx, luaScript, []string{s.key}, minVal).Err()
+}
+

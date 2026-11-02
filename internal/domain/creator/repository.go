@@ -33,4 +33,5 @@ type ScheduledTaskRepository interface {
 type SequenceGenerator interface {
 	NextPublishSeq(ctx context.Context) (int64, error)
 	GetCurrentSeq(ctx context.Context) (int64, error)
+	InitializeSequence(ctx context.Context, minVal int64) error
 }

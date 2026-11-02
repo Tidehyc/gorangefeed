@@ -176,6 +176,9 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	draftRepo := persistencecreator.NewDraftRepository(db)
 	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
 	seqGen := redis.NewSequenceGenerator(rdb)
+	var maxPublishSeq int64
+	_ = db.Table("videos").Select("COALESCE(MAX(publish_seq), 0)").Scan(&maxPublishSeq).Error
+	_ = seqGen.InitializeSequence(context.Background(), maxPublishSeq)
 	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
 	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
 	creatorHandler := httpcreator.NewHandler(creatorSvc)
@@ -235,6 +238,8 @@ type e2eExtendedCtx struct {
 	Consumer       *servicenotification.Consumer
 	TokenStore     domainaccount.TokenStore
 	PlaybackSvc    serviceplayback.Service
+	TimelineRepo   domainfeed.TimelineRepository
+	PageCache      domainfeed.PageCacheRepository
 	DraftRepo      domaincreator.DraftRepository
 	TaskRepo       domaincreator.ScheduledTaskRepository
 	VideoRepo      domainvideo.Repository
@@ -349,6 +354,9 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	draftRepo := persistencecreator.NewDraftRepository(db)
 	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
 	seqGen := redis.NewSequenceGenerator(rdb)
+	var maxPublishSeqExt int64
+	_ = db.Table("videos").Select("COALESCE(MAX(publish_seq), 0)").Scan(&maxPublishSeqExt).Error
+	_ = seqGen.InitializeSequence(context.Background(), maxPublishSeqExt)
 	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
 	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
 	creatorHandler := httpcreator.NewHandler(creatorSvc)
@@ -428,6 +436,8 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		Consumer:       notifConsumer,
 		TokenStore:     tokenStore,
 		PlaybackSvc:    playbackSvc,
+		TimelineRepo:   timelineRepo,
+		PageCache:      pageCache,
 		DraftRepo:      draftRepo,
 		TaskRepo:       taskRepo,
 		VideoRepo:      videoRepo,

@@ -193,6 +193,12 @@ func (m *mockSeqGen) NextPublishSeq(ctx context.Context) (int64, error) {
 func (m *mockSeqGen) GetCurrentSeq(ctx context.Context) (int64, error) {
 	return m.current, nil
 }
+func (m *mockSeqGen) InitializeSequence(ctx context.Context, minVal int64) error {
+	if m.current < minVal {
+		m.current = minVal
+	}
+	return nil
+}
 
 func TestCreatorService_DraftLifecycle(t *testing.T) {
 	draftRepo := newMockDraftRepo()

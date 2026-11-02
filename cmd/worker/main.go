@@ -285,6 +285,9 @@ func main() {
 	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
 	videoRepo := persistencevideo.NewRepository(db)
 	seqGen := redis.NewSequenceGenerator(rdb)
+	var maxPublishSeq int64
+	_ = db.Table("videos").Select("COALESCE(MAX(publish_seq), 0)").Scan(&maxPublishSeq).Error
+	_ = seqGen.InitializeSequence(ctx, maxPublishSeq)
 	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
 	delayedScheduler.Start(ctx)
 	l.Info("creator delayed scheduler started successfully")

@@ -183,6 +183,9 @@ func main() {
 	draftRepo := persistencecreator.NewDraftRepository(db)
 	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
 	seqGen := redis.NewSequenceGenerator(rdb)
+	var maxPublishSeq int64
+	_ = db.Table("videos").Select("COALESCE(MAX(publish_seq), 0)").Scan(&maxPublishSeq).Error
+	_ = seqGen.InitializeSequence(context.Background(), maxPublishSeq)
 	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
 	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
 	creatorHandler := httpcreator.NewHandler(creatorSvc)
