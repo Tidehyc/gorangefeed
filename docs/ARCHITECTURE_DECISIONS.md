@@ -201,37 +201,37 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    subgraph EventSources [事件驱动生产者]
-        W[Worker 消费者集群]
-        A2[API 节点 2]
+    subgraph EventSources ["事件驱动生产者"]
+        W["Worker 消费者集群"]
+        A2["API 节点 2"]
     end
 
-    subgraph RedisCluster [Redis 消息总线]
-        PubSub[("Redis Pub/Sub<br>channel.gorangefeed.notifications")]
+    subgraph RedisCluster ["Redis 消息总线"]
+        PubSub["Redis Pub/Sub: channel.gorangefeed.notifications"]
     end
 
-    subgraph APIServers [API 接入集群 (横向扩展)]
-        subgraph Node1 [API 节点 1 (Node A)]
-            Sub1[Redis Pub/Sub 监听协程]
-            Hub1["本地内存 Hub<br>clients[UID] -> []chan"]
-            Client1["客户端 1 (用户 U1)"]
-            Sub1 -->|收到广播 O(1) 查找| Hub1
-            Hub1 -->|命中本地| Client1
+    subgraph APIServers ["API 接入集群 - 横向扩展"]
+        subgraph Node1 ["API 节点 1 - Node A"]
+            Sub1["Redis Pub/Sub 监听协程"]
+            Hub1["本地内存 Hub: UID 映射长连接通道池"]
+            Client1["客户端 1 - 用户 U1"]
+            Sub1 -->|"收到广播 O(1) 查找"| Hub1
+            Hub1 -->|"命中本地客户端"| Client1
         end
 
-        subgraph Node2 [API 节点 2 (Node B)]
-            Sub2[Redis Pub/Sub 监听协程]
-            Hub2["本地内存 Hub<br>clients[UID] -> []chan"]
-            Client2["客户端 2 (用户 U2)"]
-            Sub2 -->|收到广播 O(1) 查找| Hub2
-            Hub2 -->|命中本地| Client2
+        subgraph Node2 ["API 节点 2 - Node B"]
+            Sub2["Redis Pub/Sub 监听协程"]
+            Hub2["本地内存 Hub: UID 映射长连接通道池"]
+            Client2["客户端 2 - 用户 U2"]
+            Sub2 -->|"收到广播 O(1) 查找"| Hub2
+            Hub2 -->|"命中本地客户端"| Client2
         end
     end
 
-    W -->|PUBLISH notify| PubSub
-    A2 -->|PUBLISH notify| PubSub
-    PubSub -.->|广播下发| Sub1
-    PubSub -.->|广播下发| Sub2
+    W -->|"PUBLISH 发布通知"| PubSub
+    A2 -->|"PUBLISH 发布通知"| PubSub
+    PubSub -.->|"广播下发"| Sub1
+    PubSub -.->|"广播下发"| Sub2
 ```
 
 #### 3. SSE 安全握手、断线补拉与优雅漂移时序（Lifecycle Sequence）
