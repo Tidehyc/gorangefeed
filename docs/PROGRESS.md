@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M5 系统通知与单实例 SSE 及 M5.5 跨实例 SSE 广播骨架规划完成，准备推进落地实现（M5-01~08 & M5.5-01~05）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：0 / 8 项（0%） · M5.5 阶段：0 / 5 项（0%） |
-| **进行中任务** | 已完成 M5 及 M5.5 跨项目技术对比（与 feedsystem_video_go 及 GCFeed 对比）、架构决策（ADR）、数据库迁移设计、跨进程与跨节点 Redis Pub/Sub 广播机制、断线补拉协议与 M5-01~08、M5.5-01~05 任务骨架分解；准备推进落地实现 |
+| **当前阶段** | **M5 系统通知与分布式跨实例 SSE 推进中（M5-01~03 已闭环验收，准备推进 M5-04~06）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：3 / 10 项（30%） |
+| **进行中任务** | 已落地 000009_create_notifications_table 数据表迁移与索引（幂等约束与覆盖索引）、notification 领域模型聚合根与仓储契约、GORM 仓储持久化与单元/集成测试；准备推进 M5-04（评论 @提及 用户解析器与通知服务）及 M5-05~06（Redis Pub/Sub 广播器与 RabbitMQ 消费者） |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M5-01：编写 000009_create_notifications_table 迁移脚本，定义通知持久化表、幂等约束与覆盖索引 |
+| **下一步行动** | 推进 M5-04~06：实现评论 @username 提及解析、NotificationService、分布式 Broadcaster 抽象及 RabbitMQ 消费者管道 |
 
 
 
@@ -177,9 +177,9 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M5-01** | 系统通知数据表迁移与复合索引设计 | M0-05 | 编写 `000009_create_notifications_table` 迁移脚本；包含 `id`, `recipient_id`, `actor_id`, `type`, `target_type`, `target_id`, `title`, `content`, `event_id`, `is_read`, `created_at`, `read_at`；建立 `UNIQUE(recipient_id, event_id)` 幂等消费防重约束、`(recipient_id, created_at DESC, id DESC)` 倒序翻页索引、`(recipient_id, is_read)` 未读计数覆盖索引；通过 migrate up/down 回滚验证 | `TODO` |
-| **M5-02** | 通知领域模型、枚举与仓储契约定义 | — | 在 `internal/domain/notification` 定义 `Notification` 聚合根（包含 `MarkAsRead()` 状态机流转与富文本截断规则）、`NotificationType` 与 `TargetType` 枚举、`NotificationCursor` 游标值对象、`Repository` 接口契约与领域错误常量；保持零外部依赖与单元测试覆盖 | `TODO` |
-| **M5-03** | 通知仓储持久化与覆盖索引查询实现 | M5-01, M5-02 | 在 `internal/infra/persistence/notification` 基于 GORM 实现 `Repository`；实现基于 `(created_at, id) < (cursor_created_at, cursor_id)` 的复合游标翻页查询与动态 Actor 快照回填；实现基于 `(recipient_id, is_read)` 覆盖索引的高性能未读计数统计；实现单条与一键批量标记已读（原子更新 `is_read=true, read_at=NOW()`）；实现断线补拉查询 `ListAfter` | `TODO` |
+| **M5-01** | 系统通知数据表迁移与复合索引设计 | M0-05 | 编写 `000009_create_notifications_table` 迁移脚本；包含 `id`, `recipient_id`, `actor_id`, `type`, `target_type`, `target_id`, `title`, `content`, `event_id`, `is_read`, `created_at`, `read_at`；建立 `UNIQUE(recipient_id, event_id)` 幂等消费防重约束、`(recipient_id, created_at DESC, id DESC)` 倒序翻页索引、`(recipient_id, is_read)` 未读计数覆盖索引；通过 migrate up/down 回滚验证 | `DONE` |
+| **M5-02** | 通知领域模型、枚举与仓储契约定义 | — | 在 `internal/domain/notification` 定义 `Notification` 聚合根（包含 `MarkAsRead()` 状态机流转与富文本截断规则）、`NotificationType` 与 `TargetType` 枚举、`NotificationCursor` 游标值对象、`Repository` 接口契约与领域错误常量；保持零外部依赖与单元测试覆盖 | `DONE` |
+| **M5-03** | 通知仓储持久化与覆盖索引查询实现 | M5-01, M5-02 | 在 `internal/infra/persistence/notification` 基于 GORM 实现 `Repository`；实现基于 `(created_at, id) < (cursor_created_at, cursor_id)` 的复合游标翻页查询与动态 Actor 快照回填；实现基于 `(recipient_id, is_read)` 覆盖索引的高性能未读计数统计；实现单条与一键批量标记已读（原子更新 `is_read=true, read_at=NOW()`）；实现断线补拉查询 `ListAfter` | `DONE` |
 | **M5-04** | 评论 `@提及` 用户解析器与通知服务 | M5-02 | 在 `internal/service/notification` 实现提及解析器：正则提取评论中的 `@username`（去重并限制上限 10 人）；联动 `accountRepo` 批量查询目标用户 ID；过滤自提及与视频作者自身；批量生成 `mention` 类型系统通知并持久化落库；覆盖单测 | `TODO` |
 | **M5-05** | 分布式事件广播器抽象与 Redis Pub/Sub 引擎实现 | M0-06 | 抽象通用 `Broadcaster` 接口（`Publish`, `Subscribe`, `Close`）；在 `internal/infra/redis` 实现 `RedisBroadcaster`，订阅集中式广播主题 `channel.gorangefeed.notifications`；提供 `MemoryBroadcaster` 供本地单机与轻量单测使用；支持断线自动重试与重新订阅 | `TODO` |
 | **M5-06** | RabbitMQ 通知消费者与跨进程 Redis Pub/Sub 事件广播 | M4-07, M5-03~05 | 在 `internal/service/notification` 实现 `NotificationConsumer`：订阅 `interaction.liked`、`interaction.commented`、`relation.followed` 等事件；过滤自身操作防自扰；关联视频/评论作者并触发落库与 `@mention` 派发；依托消费端去重表与唯一键保障幂等；落库成功后调用 `Broadcaster.Publish` 向 Redis 广播信令；在 `cmd/worker/main.go` 中挂载并启动 | `TODO` |
