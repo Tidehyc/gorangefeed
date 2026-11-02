@@ -137,11 +137,12 @@ func TestService_LikeAndCommentFlow(t *testing.T) {
 }
 
 func TestService_InvalidInputs(t *testing.T) {
-	svc, _, db := setupServiceTest(t)
+	svc, videoRepo, db := setupServiceTest(t)
 	if db == nil {
 		return
 	}
 	ctx := context.Background()
+	videoID := createTestVideoForService(t, videoRepo)
 
 	// Like non-existent video
 	err := svc.LikeVideo(ctx, 1, 99999999)
@@ -149,8 +150,14 @@ func TestService_InvalidInputs(t *testing.T) {
 		t.Errorf("expected ErrVideoNotFound, got %v", err)
 	}
 
+	// Comment on non-existent video
+	_, _, err = svc.CreateComment(ctx, 1, 99999999, 0, "Valid content", "key-nonexist")
+	if !errors.Is(err, domaininteraction.ErrVideoNotFound) {
+		t.Errorf("expected ErrVideoNotFound for non-existent video, got %v", err)
+	}
+
 	// Create comment with empty content
-	_, _, err = svc.CreateComment(ctx, 1, 1, 0, "   ", "key")
+	_, _, err = svc.CreateComment(ctx, 1, videoID, 0, "   ", "key")
 	if !errors.Is(err, domaininteraction.ErrEmptyCommentContent) {
 		t.Errorf("expected ErrEmptyCommentContent, got %v", err)
 	}

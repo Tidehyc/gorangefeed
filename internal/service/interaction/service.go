@@ -149,6 +149,18 @@ func (s *Service) ListMyLikedVideos(ctx context.Context, userID int64, cursor in
 
 // CreateComment publishes a new comment on a video with idempotency guarantee.
 func (s *Service) CreateComment(ctx context.Context, userID, videoID, parentID int64, content, idempotencyKey string) (*domaininteraction.CommentDetail, bool, error) {
+	comment := &domaininteraction.Comment{
+		VideoID:        videoID,
+		UserID:         userID,
+		ParentID:       parentID,
+		Content:        strings.TrimSpace(content),
+		IdempotencyKey: strings.TrimSpace(idempotencyKey),
+		Status:         domaininteraction.CommentStatusPublished,
+	}
+	if err := comment.Validate(); err != nil {
+		return nil, false, err
+	}
+
 	v, err := s.videoRepo.FindByID(ctx, videoID)
 	if err != nil {
 		if errors.Is(err, domainvideo.ErrVideoNotFound) {
@@ -172,18 +184,6 @@ func (s *Service) CreateComment(ctx context.Context, userID, videoID, parentID i
 		if !parent.IsPublished() || parent.VideoID != videoID {
 			return nil, false, domaininteraction.ErrInvalidParentComment
 		}
-	}
-
-	comment := &domaininteraction.Comment{
-		VideoID:        videoID,
-		UserID:         userID,
-		ParentID:       parentID,
-		Content:        strings.TrimSpace(content),
-		IdempotencyKey: strings.TrimSpace(idempotencyKey),
-		Status:         domaininteraction.CommentStatusPublished,
-	}
-	if err := comment.Validate(); err != nil {
-		return nil, false, err
 	}
 
 	outboxEvent, err := domainoutbox.NewEvent(domainoutbox.EventTypeInteractionCommented, map[string]any{
