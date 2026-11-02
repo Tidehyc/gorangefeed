@@ -79,6 +79,8 @@ type ExposureRepository interface {
 	RecordExposures(ctx context.Context, viewerID int64, videoIDs []int64) error
 	// IsExposed checks if a viewer has already been exposed to a video.
 	IsExposed(ctx context.Context, viewerID int64, videoID int64) (bool, error)
+	// FilterExposed takes a batch of candidate video IDs and returns only those that have not been exposed to the viewer.
+	FilterExposed(ctx context.Context, viewerID int64, videoIDs []int64) ([]int64, error)
 }
 
 // FollowingFeedRepository defines storage contracts for the hybrid push-pull following feed.
@@ -110,3 +112,17 @@ type HotTimelineStore interface {
 	// GetSnapshotTotal returns the total count of valid items in the specified asOf snapshot.
 	GetSnapshotTotal(ctx context.Context, asOf time.Time) (int64, error)
 }
+
+// RecallEngine provides multi-source video candidates retrieval for the recommendation feed.
+type RecallEngine interface {
+	// Recall retrieves candidate video IDs aggregated from hot, latest, and exploratory pools.
+	Recall(ctx context.Context, targetCount int, seed int64) ([]int64, error)
+}
+
+// AuthorDiversifier ensures authors are diversified within a feed page using a sliding window.
+type AuthorDiversifier interface {
+	// Diversify filters and reorders video candidates such that adjacent videos from the same author
+	// are separated by at least interval items, falling back gracefully if candidates are limited.
+	Diversify(videoIDs []int64, authorMap map[int64]int64, limit int, interval int) []int64
+}
+

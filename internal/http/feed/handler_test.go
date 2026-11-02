@@ -57,6 +57,23 @@ func (m *mockFeedService) GetLikeRankFeed(ctx context.Context, viewerID int64, c
 	return &domainfeed.LikeRankPage{Items: []*domainfeed.FeedItem{}}, nil
 }
 
+func (m *mockFeedService) GetHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error) {
+	return &domainfeed.HotFeedPage{Items: []*domainfeed.FeedItem{}}, nil
+}
+
+func (m *mockFeedService) ListHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error) {
+	return m.GetHotFeed(ctx, viewerID, cursor, limit)
+}
+
+func (m *mockFeedService) GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
+	return &domainfeed.RecommendFeedPage{Items: []*domainfeed.FeedItem{}}, nil
+}
+
+func (m *mockFeedService) ListRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
+	return m.GetRecommendFeed(ctx, viewerID, cursor, limit)
+}
+
+
 func setupTestEngine(svc *mockFeedService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

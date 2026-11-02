@@ -157,6 +157,24 @@ func (m *mockExposureRepo) IsExposed(ctx context.Context, viewerID int64, videoI
 	return false, nil
 }
 
+func (m *mockExposureRepo) FilterExposed(ctx context.Context, viewerID int64, videoIDs []int64) ([]int64, error) {
+	if viewerID <= 0 || len(videoIDs) == 0 {
+		return videoIDs, nil
+	}
+	exposedSet := make(map[int64]bool)
+	for _, id := range m.exposures[viewerID] {
+		exposedSet[id] = true
+	}
+	unexposed := make([]int64, 0, len(videoIDs))
+	for _, id := range videoIDs {
+		if !exposedSet[id] {
+			unexposed = append(unexposed, id)
+		}
+	}
+	return unexposed, nil
+}
+
+
 // MockDBRepo implements domainfeed.FeedDBRepository
 type mockDBRepo struct {
 	coldCards  []*domainfeed.FeedCard
@@ -166,7 +184,9 @@ type mockDBRepo struct {
 	statusMap  map[int64]int8
 	floor      int64
 	viewCounts map[int64]int64
+	likeVideos []*domainfeed.LikeRankVideo
 }
+
 
 func (m *mockDBRepo) ListColdVideos(ctx context.Context, cursor int64, limit int) ([]*domainfeed.FeedCard, []*domainfeed.FeedStat, int64, bool, error) {
 	resCards := make([]*domainfeed.FeedCard, 0)
@@ -227,8 +247,15 @@ func (m *mockDBRepo) IncrViewCount(ctx context.Context, videoID int64) error {
 	return nil
 }
 func (m *mockDBRepo) ListLikeRankVideos(ctx context.Context, cursorLikeCount, cursorVideoID int64, limit int) ([]*domainfeed.LikeRankVideo, error) {
-	return nil, nil
+	if len(m.likeVideos) == 0 {
+		return nil, nil
+	}
+	if limit > len(m.likeVideos) {
+		limit = len(m.likeVideos)
+	}
+	return m.likeVideos[:limit], nil
 }
+
 
 func TestFeedService_GetGlobalFeed_L1HitAndStale(t *testing.T) {
 	ctx := context.Background()

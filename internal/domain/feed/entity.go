@@ -135,6 +135,20 @@ type LikeRankPage struct {
 	HasMore    bool        `json:"has_more"`
 }
 
+// HotFeedPage represents a paginated list of feed items for the hot feed scenario.
+type HotFeedPage struct {
+	Items      []*FeedItem `json:"items"`
+	NextCursor string      `json:"next_cursor"`
+	HasMore    bool        `json:"has_more"`
+}
+
+// RecommendFeedPage represents a paginated list of feed items for the recommendation scenario.
+type RecommendFeedPage struct {
+	Items      []*FeedItem `json:"items"`
+	NextCursor string      `json:"next_cursor"`
+	HasMore    bool        `json:"has_more"`
+}
+
 // EncodeLikeRankCursor encodes likeCount and videoID into a cursor string.
 func EncodeLikeRankCursor(likeCount, videoID int64) string {
 	if likeCount <= 0 && videoID <= 0 {
@@ -327,3 +341,74 @@ type HotScoreEvent struct {
 	Delta      float64        `json:"delta"`
 	OccurredAt time.Time      `json:"occurred_at"`
 }
+
+// RecallCandidate encapsulates a video candidate retrieved from a recall channel.
+type RecallCandidate struct {
+	VideoID int64  `json:"video_id"`
+	Source  string `json:"source"` // "hot", "latest", "explore"
+}
+
+// RecommendationRule defines the ratio allocation and configuration for multi-source recall.
+type RecommendationRule struct {
+	HotRatio     float64 `json:"hot_ratio"`
+	LatestRatio  float64 `json:"latest_ratio"`
+	ExploreRatio float64 `json:"explore_ratio"`
+	WindowSize   int     `json:"window_size"`
+}
+
+// DefaultRecommendationRule provides standard 50/30/20 recall allocation with window interval 3.
+func DefaultRecommendationRule() RecommendationRule {
+	return RecommendationRule{
+		HotRatio:     0.5,
+		LatestRatio:  0.3,
+		ExploreRatio: 0.2,
+		WindowSize:   3,
+	}
+}
+
+// AuthorWindow tracks recently selected author IDs to enforce diversification intervals.
+type AuthorWindow struct {
+	authors  []int64
+	capacity int
+}
+
+// NewAuthorWindow creates an AuthorWindow with the specified interval capacity.
+func NewAuthorWindow(capacity int) *AuthorWindow {
+	if capacity <= 0 {
+		capacity = 3
+	}
+	return &AuthorWindow{
+		authors:  make([]int64, 0, capacity),
+		capacity: capacity,
+	}
+}
+
+// Contains checks if the authorID is present within the current sliding window.
+func (w *AuthorWindow) Contains(authorID int64) bool {
+	if authorID <= 0 {
+		return false
+	}
+	for _, id := range w.authors {
+		if id == authorID {
+			return true
+		}
+	}
+	return false
+}
+
+// Add appends an authorID to the window, sliding out the oldest if capacity is reached.
+func (w *AuthorWindow) Add(authorID int64) {
+	if authorID <= 0 {
+		return
+	}
+	if len(w.authors) >= w.capacity {
+		w.authors = w.authors[1:]
+	}
+	w.authors = append(w.authors, authorID)
+}
+
+// Reset clears all authors in the sliding window.
+func (w *AuthorWindow) Reset() {
+	w.authors = w.authors[:0]
+}
+

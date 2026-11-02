@@ -199,3 +199,51 @@ func TestRecommendCursor_EncodeAndDecode(t *testing.T) {
 		t.Fatalf("expected ErrInvalidRecommendCursor for bad base64, got %v", err)
 	}
 }
+
+func TestAuthorWindow(t *testing.T) {
+	w := NewAuthorWindow(3)
+	if w.Contains(101) {
+		t.Fatalf("expected window to be empty")
+	}
+
+	w.Add(101)
+	w.Add(102)
+	w.Add(103)
+
+	if !w.Contains(101) || !w.Contains(102) || !w.Contains(103) {
+		t.Fatalf("expected 101, 102, 103 to be present")
+	}
+
+	// Adding 4th element should slide out 101
+	w.Add(104)
+	if w.Contains(101) {
+		t.Fatalf("expected 101 to have slid out")
+	}
+	if !w.Contains(104) {
+		t.Fatalf("expected 104 to be present")
+	}
+
+	// Non-positive IDs are ignored
+	w.Add(0)
+	w.Add(-5)
+	if w.Contains(0) {
+		t.Fatalf("expected non-positive IDs to not be stored")
+	}
+
+	// Reset
+	w.Reset()
+	if w.Contains(102) || w.Contains(103) || w.Contains(104) {
+		t.Fatalf("expected window to be empty after reset")
+	}
+}
+
+func TestRecommendationRule(t *testing.T) {
+	r := DefaultRecommendationRule()
+	if r.HotRatio != 0.5 || r.LatestRatio != 0.3 || r.ExploreRatio != 0.2 {
+		t.Fatalf("unexpected default recommendation ratios: %+v", r)
+	}
+	if r.WindowSize != 3 {
+		t.Fatalf("unexpected default window size: %d", r.WindowSize)
+	}
+}
+

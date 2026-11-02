@@ -236,3 +236,31 @@ func (r *exposureRepository) IsExposed(ctx context.Context, viewerID int64, vide
 	}
 	return exposed, nil
 }
+
+func (r *exposureRepository) FilterExposed(ctx context.Context, viewerID int64, videoIDs []int64) ([]int64, error) {
+	if viewerID <= 0 || len(videoIDs) == 0 {
+		return videoIDs, nil
+	}
+
+	key := fmt.Sprintf("reco:exposed:%d", viewerID)
+	pipe := r.rdb.Pipeline()
+	cmds := make([]*redis.BoolCmd, len(videoIDs))
+	for i, id := range videoIDs {
+		cmds[i] = pipe.SIsMember(ctx, key, id)
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("filter exposures pipeline error: %w", err)
+	}
+
+	unexposed := make([]int64, 0, len(videoIDs))
+	for i, cmd := range cmds {
+		isExposed, err := cmd.Result()
+		if err != nil || !isExposed {
+			// If not exposed, retain candidate
+			unexposed = append(unexposed, videoIDs[i])
+		}
+	}
+	return unexposed, nil
+}

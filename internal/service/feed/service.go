@@ -22,6 +22,14 @@ type Service interface {
 	ListFollowingFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
 	// GetLikeRankFeed retrieves videos ordered by historical like count using composite cursor.
 	GetLikeRankFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error)
+	// GetHotFeed retrieves a page of the hot video feed based on 60-minute sliding window aggregation and as_of snapshot.
+	GetHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error)
+	// ListHotFeed is an alias for GetHotFeed.
+	ListHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error)
+	// GetRecommendFeed retrieves personalized or guest recommended videos via multi-source recall, exposure filtering and author diversification.
+	GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error)
+	// ListRecommendFeed is an alias for GetRecommendFeed.
+	ListRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error)
 	// RecordView reports a video playback or exposure impression, incrementing view count and updating exposure history.
 	RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
 	// AppendTimeline appends a newly published video to the Redis timeline.
@@ -40,6 +48,9 @@ type service struct {
 	followingRepo   domainfeed.FollowingFeedRepository
 	relationRepo    domainrelation.Repository
 	interactionRepo domaininteraction.Repository
+	hotStore        domainfeed.HotTimelineStore
+	recallEngine    domainfeed.RecallEngine
+	diversifier     domainfeed.AuthorDiversifier
 	sfGroup         singleflight.Group
 }
 
@@ -58,6 +69,22 @@ func WithFollowingDependencies(
 		s.interactionRepo = interactionRepo
 	}
 }
+
+// WithHotTimelineStore injects the hot timeline store for sliding hot feed.
+func WithHotTimelineStore(hotStore domainfeed.HotTimelineStore) Option {
+	return func(s *service) {
+		s.hotStore = hotStore
+	}
+}
+
+// WithRecommendDependencies injects recall engine and author diversifier for recommendation feed.
+func WithRecommendDependencies(recallEngine domainfeed.RecallEngine, diversifier domainfeed.AuthorDiversifier) Option {
+	return func(s *service) {
+		s.recallEngine = recallEngine
+		s.diversifier = diversifier
+	}
+}
+
 
 // NewService creates a new Feed Service instance.
 func NewService(
@@ -697,3 +724,241 @@ func (s *service) SyncFloorAndTrim(ctx context.Context) (int64, error) {
 	}
 	return floor, nil
 }
+
+func (s *service) ListHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error) {
+	return s.GetHotFeed(ctx, viewerID, cursor, limit)
+}
+
+func (s *service) GetHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error) {
+	asOf, offset, err := domainfeed.DecodeHotCursor(cursor)
+	if err != nil {
+		return nil, domainfeed.ErrInvalidHotCursor
+	}
+
+	if limit <= 0 {
+		limit = domainfeed.DefaultLimit
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	// First page initialization: align as_of to current minute, trigger window aggregation
+	if asOf == 0 {
+		asOfTime := time.Now().Truncate(time.Minute)
+		asOf = asOfTime.Unix()
+		offset = 0
+
+		if s.hotStore != nil {
+			if _, err := s.hotStore.MergeWindow(ctx, asOfTime, 60); err != nil {
+				slog.Warn("failed to merge hot window, continuing with best effort", "error", err)
+			}
+		}
+	}
+
+	asOfTime := time.Unix(asOf, 0)
+	var videoIDs []int64
+
+	if s.hotStore != nil {
+		ids, err := s.hotStore.ListBySnapshot(ctx, asOfTime, offset, limit)
+		if err == nil {
+			videoIDs = ids
+		} else {
+			slog.Warn("failed to list hot snapshot, fallback to db", "error", err)
+		}
+	}
+
+	// Cold start or Redis miss fallback to DB high-like ranking
+	if len(videoIDs) == 0 && offset == 0 && s.dbRepo != nil {
+		likeVideos, err := s.dbRepo.ListLikeRankVideos(ctx, 0, 0, limit)
+		if err == nil {
+			for _, v := range likeVideos {
+				videoIDs = append(videoIDs, v.VideoID)
+			}
+		}
+	}
+
+	if len(videoIDs) == 0 {
+		return &domainfeed.HotFeedPage{
+			Items:      []*domainfeed.FeedItem{},
+			NextCursor: "",
+			HasMore:    false,
+		}, nil
+	}
+
+	// Determine pagination has_more
+	hasMore := len(videoIDs) >= limit
+	if s.hotStore != nil {
+		total, err := s.hotStore.GetSnapshotTotal(ctx, asOfTime)
+		if err == nil && total > 0 {
+			hasMore = int64(offset+len(videoIDs)) < total
+		}
+	}
+
+	var nextCursor string
+	if hasMore {
+		nextCursor = domainfeed.EncodeHotCursor(asOf, offset+len(videoIDs))
+	}
+
+	items, err := s.hydrateVideoIDs(ctx, videoIDs, viewerID, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate hot feed items: %w", err)
+	}
+
+	return &domainfeed.HotFeedPage{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	}, nil
+}
+
+func (s *service) ListRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
+	return s.GetRecommendFeed(ctx, viewerID, cursor, limit)
+}
+
+func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
+	page, seed, err := domainfeed.DecodeRecommendCursor(cursor)
+	if err != nil {
+		return nil, domainfeed.ErrInvalidRecommendCursor
+	}
+
+	if limit <= 0 {
+		limit = domainfeed.DefaultLimit
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	if seed == 0 {
+		seed = time.Now().UnixNano()
+	}
+
+	// 1. Multi-source candidate recall
+	targetRecall := limit * 3
+	if targetRecall < 30 {
+		targetRecall = 30
+	}
+
+	var candidates []int64
+	if s.recallEngine != nil {
+		candidates, _ = s.recallEngine.Recall(ctx, targetRecall, seed)
+	}
+
+	// Fallback to cold videos from DB if recall engine is not set or returns empty
+	if len(candidates) == 0 && s.dbRepo != nil {
+		coldCards, _, _, _, err := s.dbRepo.ListColdVideos(ctx, 0, targetRecall)
+		if err == nil {
+			for _, card := range coldCards {
+				candidates = append(candidates, card.VideoID)
+			}
+		}
+	}
+
+	// 2. Exposure filter for logged-in users (viewerID > 0)
+	if viewerID > 0 && s.exposureRepo != nil && len(candidates) > 0 {
+		filtered, err := s.exposureRepo.FilterExposed(ctx, viewerID, candidates)
+		if err == nil {
+			candidates = filtered
+		}
+	}
+
+	// 3. Batch fetch author IDs for sliding window diversification
+	authorMap := make(map[int64]int64)
+	if len(candidates) > 0 {
+		var cardMap map[int64]*domainfeed.FeedCard
+		if s.cardCache != nil {
+			cardMap, _ = s.cardCache.GetCards(ctx, candidates)
+		}
+		missingIDs := make([]int64, 0)
+		for _, id := range candidates {
+			if c, ok := cardMap[id]; ok && c != nil {
+				authorMap[id] = c.AuthorID
+			} else {
+				missingIDs = append(missingIDs, id)
+			}
+		}
+		if len(missingIDs) > 0 && s.dbRepo != nil {
+			dbCards, err := s.dbRepo.GetCardsByIDs(ctx, missingIDs)
+			if err == nil {
+				for id, c := range dbCards {
+					authorMap[id] = c.AuthorID
+				}
+			}
+		}
+	}
+
+	// 4. Sliding window author diversification
+	var diversified []int64
+	if s.diversifier != nil && len(candidates) > 0 {
+		diversified = s.diversifier.Diversify(candidates, authorMap, limit, 3)
+	} else {
+		diversified = candidates
+		if len(diversified) > limit {
+			diversified = diversified[:limit]
+		}
+	}
+
+	// 5. FillCheck fallback: If remaining items less than limit, supplement from timeline or DB
+	if len(diversified) < limit {
+		seen := make(map[int64]bool)
+		for _, id := range diversified {
+			seen[id] = true
+		}
+
+		if s.timelineRepo != nil {
+			recentIDs, err := s.timelineRepo.ListByCursor(ctx, 0, limit*2)
+			if err == nil {
+				for _, id := range recentIDs {
+					if !seen[id] {
+						seen[id] = true
+						diversified = append(diversified, id)
+						if len(diversified) >= limit {
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if len(diversified) < limit && s.dbRepo != nil {
+			coldCards, _, _, _, err := s.dbRepo.ListColdVideos(ctx, 0, limit*2)
+			if err == nil {
+				for _, card := range coldCards {
+					if !seen[card.VideoID] {
+						seen[card.VideoID] = true
+						diversified = append(diversified, card.VideoID)
+						if len(diversified) >= limit {
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(diversified) == 0 {
+		return &domainfeed.RecommendFeedPage{
+			Items:      []*domainfeed.FeedItem{},
+			NextCursor: "",
+			HasMore:    false,
+		}, nil
+	}
+
+	// 6. Dynamic Hydration
+	items, err := s.hydrateVideoIDs(ctx, diversified, viewerID, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hydrate recommend feed items: %w", err)
+	}
+
+	hasMore := len(diversified) >= limit
+	var nextCursor string
+	if hasMore {
+		nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)
+	}
+
+	return &domainfeed.RecommendFeedPage{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	}, nil
+}
+

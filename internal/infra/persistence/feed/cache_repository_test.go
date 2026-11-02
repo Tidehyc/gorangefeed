@@ -169,4 +169,26 @@ func TestCacheRepositories(t *testing.T) {
 	if err != nil || isExpoOther {
 		t.Fatalf("expected other not exposed, got %v", isExpoOther)
 	}
+
+	// FilterExposed batch test
+	filtered, err := expoRepo.FilterExposed(ctx, viewerID, []int64{v1ID, 777777, v2ID, 999999})
+	if err != nil {
+		t.Fatalf("FilterExposed failed: %v", err)
+	}
+	if len(filtered) != 2 || filtered[0] != 777777 || filtered[1] != 999999 {
+		t.Fatalf("expected [777777, 999999], got: %+v", filtered)
+	}
+
+	// FilterExposed for anonymous viewer (viewerID <= 0) should return all
+	anonFiltered, err := expoRepo.FilterExposed(ctx, 0, []int64{v1ID, v2ID})
+	if err != nil || len(anonFiltered) != 2 {
+		t.Fatalf("expected anon to keep all candidates, got: %+v", anonFiltered)
+	}
+
+	// FilterExposed with empty candidate list
+	emptyFiltered, err := expoRepo.FilterExposed(ctx, viewerID, nil)
+	if err != nil || len(emptyFiltered) != 0 {
+		t.Fatalf("expected empty result for nil candidate list")
+	}
 }
+
