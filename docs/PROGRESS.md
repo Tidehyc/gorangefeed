@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M6 性能压测与播放 QoS 体验监控已全量闭环验收（M6-01~06 100% 达成，项目一期核心架构圆满收官）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：10 / 10 项（100%） · M6 阶段：6 / 6 项（100%） |
-| **进行中任务** | 已完成 Feat 1 (M6-01~03) 与 Feat 2 (M6-04~06)：构建自适应播放体验与 QoS 监控、原生 Go Benchmark 读写并发压测套件、E2E 生命周期测试及 BENCHMARK_REPORT.md 分析报告 |
+| **当前阶段** | **二期架构演进启动：M7 创作中心与高可靠发布时序引擎骨架已就绪（准备推进 Feat 1: M7-01~03 数据迁移、领域模型与草稿仓储）** |
+| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 0 / 8 项（0%） · M8~M10 规划中 |
+| **进行中任务** | 编制二期架构演进骨架与任务分解；对比业界成熟方案定义草稿状态机、定时发布延迟队列与单调递增发布序号 `publish_seq` 消除时序空洞规范 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 项目一期核心功能与性能基准全量收官交付（M0~M6 全部 100% 验收）。可根据业务规划启动二期演进（草稿箱、定时发布、单调发布序号、视频异步转码与审核流水线等） |
+| **下一步行动** | 推进 M7 Feat 1 (M7-01~03)：编写 drafts 与 scheduled_tasks 数据表迁移，定义领域聚合根与持久化仓储 |
 
 
 
@@ -44,7 +44,13 @@
 | **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `DONE` | 点赞/评论/关注事务一致性与计数防丢；客户端唯一键评论幂等防重放与热评排序；互粉好友判定；Outbox 本地消息表分布式租约调度与 RabbitMQ 可靠投递；消费端事务去重；关注流推拉结合（普通写扩散+大V读扩散多路归并）与冷启动回源；全局流 L1 骨架共享与个性化互动态动态装配；历史累计高赞榜复合游标分页 |
 | **M4.5**| 实时热榜与轻量推荐流（进阶流） | FR-FEED-05, FR-FEED-06 | `DONE` | 60分钟滑动窗口互动热度衰减（ZSet分钟桶）；as_of+offset稳定快照分页；热门/最新/探索多路召回、曝光去重与同作者打散；全生命周期 E2E 测试绿灯 |
 | **M5** | 系统通知与分布式跨实例 SSE | FR-NOT-01~07 | `DONE` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；基于 Redis Pub/Sub 的跨实例广播秒级到达；SSE 在线推送与 60s 重叠窗口基于 Last-Event-ID 断线补拉验证完整 |
-| **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `DONE` | 核心链路达到性能设计指标或产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
+| **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `DONE` | 核心链路达到性能设计指标并产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
+| **M7** | 创作中心与高可靠发布时序 | FR-CRT-*, NFR-REL-03 | `TODO` | 草稿箱全生命周期管理；秒级准点定时发布延迟队列调度；分布式发号器生成 `publish_seq` 彻底消除时间线翻页空洞 |
+| **M8** | 视频收藏夹与播放历史资产中心 | FR-INT-08, FR-USR-04 | `TODO` | 默认与自定义多收藏夹；播放历史滑动窗口保留与断点续播；高权重收藏事件正向加权热榜与推荐召回 |
+| **M9** | 内容合规与安全审核中台 | NFR-SEC-08, FR-ADM-* | `TODO` | 先审后发/先发后审双轨制；Aho-Corasick 高效敏感词机审引擎；运营后台违规下架与用户封禁处罚 |
+| **M10**| 全栈 Web 短视频流式演示客户端 | FR-WEB-* | `TODO` | 响应式 Web 视频流上下滑播放；双击点赞动画；实时 SSE 通知浮窗展示；QoS 观测面板展示 |
+
+---
 
 
 ---
@@ -203,14 +209,54 @@
 
 ---
 
-## 十四、后续二期进阶演进（M7+）
+## 十四、M7 创作中心与高可靠发布时序任务明细
 
-- **草稿箱与定时发布（Scheduled Publishing）**：支持作者保存草稿并在未来指定时间自动发布；
-- **单调发布序号（`publish_seq`）与分布式发号器**：当引入草稿箱、定时发布与异步审核流后，彻底解耦数据库主键 `video.id` 与业务发布时序；引入分布式发号器（Redis INCR / Leaf 号段发号）并在 Outbox 消费端单点打标 `publish_seq`，同时在 MySQL 引入 `(published_at, id)` 复合游标行比较查询，彻底根除长事务乱序提交与审核延迟造成的时间线空洞；
-- **视频服务端转码流水线**：ffmpeg 自动截取第一帧封面与异步多码率转码（HLS / DASH）；
-- **内容安全审核流水线**：发布进入待审态 `review_tasks`，机器初审评分 + 人工判定；
-- **运营后台管理**：违规强制下架与用户封号后台接口；
-- **社交互动增强**：视频收藏夹（Favorite）与用户点对点私信系统（DM）。
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M7-01** | 创作中心数据表迁移与 `publish_seq` 扩展 | M0-05, M2-01 | 编写 `000010_create_creator_and_publish_seq_tables` 迁移脚本；创建 `drafts` 表（`id, author_id, title, description, play_url, cover_url, duration_ms, status, created_at, updated_at`）与 `(author_id, updated_at DESC, id DESC)` 索引；创建 `scheduled_tasks` 表；在 `videos` 表增加 `publish_seq BIGINT NOT NULL DEFAULT 0` 字段与唯一复合索引 `UNIQUE KEY uk_publish_seq (publish_seq)`；通过 migrate up/down 回滚验证 | `TODO` |
+| **M7-02** | 创作中心领域模型与分布式发号器契约定义 | — | 在 `internal/domain/creator` 定义 `Draft` 聚合根、`DraftStatus` 枚举、`ScheduledTask` 实体、`ScheduledStatus` 枚举、`DraftRepository`、`ScheduledTaskRepository` 契约及 `SequenceGenerator` 分布式发号器接口；零外部依赖与单元测试覆盖 | `TODO` |
+| **M7-03** | 草稿箱持久化仓储与游标翻页实现 | M7-01, M7-02 | 在 `internal/infra/persistence/creator` 基于 GORM 实现 `DraftRepository`；实现草稿存、取、改、删与作者数据隔离；实现基于 `(updated_at, id)` 复合游标的分页拉取；实现草稿向正式视频一键发布的原子流转 | `TODO` |
+| **M7-04** | 分布式发号器与时间线时序空洞消除机制 | M0-06, M7-01, M7-02 | 在 `internal/infra/redis` 实现基于 Redis `INCR seq:video:published` 的分布式发号器；改造 Outbox 发布消费端，在视频正式发布瞬间原子申请连续递增的 `publish_seq` 并回写 `videos`；全局时间线 ZSet score 切换为 `publish_seq`，彻底根治长事务提交乱序与延迟发布导致的翻页漏看空洞 | `TODO` |
+| **M7-05** | 定时发布延迟队列与分布式 Worker 抢占调度器 | M0-06, M7-01, M7-02 | 在 `internal/infra/scheduler` 实现基于 Redis ZSet 延迟队列（score 为计划发布 Unix 时间戳）与分布式锁的定时发布调度器；计划到期秒级出队、CAS 状态防重流转、入队 Outbox 触发原子发号发布流程；支持故障重试与节点竞争互斥 | `TODO` |
+| **M7-06** | 创作中心业务服务编排与发布状态机驱动 | M7-03~05 | 在 `internal/service/creator` 实现 `Service`：草稿保存与校验、定时发布计划时间校验（限制未来 5 分钟至 30 天以内）、定时任务取消并退回草稿状态机、联动 `videoRepo` 正式发版；单元测试覆盖 | `TODO` |
+| **M7-07** | 创作中心 HTTP 控制器与全路由依赖装配 | M7-06 | 在 `internal/http/creator` 暴露 `POST/GET/PUT/DELETE /api/v1/creator/drafts`、`POST /api/v1/creator/publish-scheduled`、`GET/DELETE /api/v1/creator/scheduled-tasks`；统一响应信封与错误码；在 `cmd/api/main.go` 与 `cmd/worker/main.go` 完成依赖注入与路由/调度引擎挂载；编写 Handler 单测 | `TODO` |
+| **M7-08** | M7 创作中心与高可靠发布时序全生命周期 E2E 集成测试 | M7-07 | 在 `test/e2e/creator_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证草稿增删改查 → 草稿一键发布 → 定时发布排期时间校验拦截 → 定时到期秒级准点自动触发入时间线 → 取消定时发布并回退草稿 → 50 并发发布单调发号严格递增验证 → 乱序提交下的时间线无漏翻页断言 → 并发 Worker 抢占防重复调度断言 → `make vet && make test` 全量绿灯回归 | `TODO` |
+
+---
+
+## 十五、M8 视频收藏夹与播放历史资产中心任务明细
+
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M8-01** | 收藏夹与播放历史数据表迁移 | M0-05 | 编写 `000011_create_favorites_and_history_tables` 迁移脚本；创建 `favorites`（收藏夹元数据）、`favorite_items`（收藏关系表，`UNIQUE(favorite_id, video_id)`）、`watch_history`（历史观看记录表）；在 `video_stats` 增加 `favorite_count` 字段；通过 migrate up/down 验证 | `TODO` |
+| **M8-02** | 收藏与历史领域模型与仓储契约定义 | — | 在 `internal/domain/asset` 定义 `FavoriteFolder` 聚合根、`FavoriteItem`、`WatchHistory` 实体、滑动窗口保留策略值对象与仓储契约；单元测试覆盖 | `TODO` |
+| **M8-03** | 收藏夹与播放历史持久化仓储实现 | M8-01, M8-02 | 在 `internal/infra/persistence/asset` 实现仓储；基于 Redis ZSet 实现单个用户最近 100 条播放历史毫秒级滑动维护，异步落库 MySQL；实现默认收藏夹自动初始化与多收藏夹归类；原子同步自增/自减 `video_stats.favorite_count` | `TODO` |
+| **M8-04** | 资产中心服务编排与热度推荐正向加权 | M8-03, M4.5 | 在 `internal/service/asset` 实现业务服务：收藏/取消收藏、历史进度记录与断点续播查询；触发 `interaction.favorited` 事件，在热榜滑动分钟桶给予 3 倍于点赞的高权重热度赋能；单元测试覆盖 | `TODO` |
+| **M8-05** | 资产中心 HTTP 控制器与全路由挂载 | M8-04 | 在 `internal/http/asset` 暴露 `POST/DELETE /api/v1/videos/:id/favorite`、`GET/POST/DELETE /api/v1/user/favorites`、`GET /api/v1/user/history`；全依赖组装与路由注册；Handler 单测 | `TODO` |
+| **M8-06** | M8 资产中心全生命周期 E2E 集成测试 | M8-05 | 在 `test/e2e/asset_lifecycle_test.go` 中验证黑盒测试：收藏与取消收藏原子计数流转 → 默认收藏夹与自定义收藏夹分类管理 → 跨设备断点续播进度保存与历史滑动窗口修剪 → 收藏行为驱动热榜热度倍增与推荐流正向加权断言 → `make vet && make test` 全量绿灯回归 | `TODO` |
+
+---
+
+## 十六、M9 内容合规与安全审核中台任务明细
+
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M9-01** | 审核任务与违规治理数据表迁移 | M0-05 | 编写 `000012_create_moderation_tables` 迁移脚本；创建 `review_tasks` 表（`video_id, status, risk_score, matched_words, reviewer_id, review_note`）与 `moderation_logs` 表；通过 migrate up/down 回滚验证 | `TODO` |
+| **M9-02** | 审核中台领域模型与规则引擎契约定义 | — | 在 `internal/domain/moderation` 定义 `ReviewTask` 聚合根（包含 `Approved/Rejected/Pending` 状态机流转）、`ReviewPolicy` 策略枚举（先审后发/先发后审）、`SensitiveMatcher` 接口契约；单元测试覆盖 | `TODO` |
+| **M9-03** | 基于 Aho-Corasick 算法的敏感词机审引擎 | M9-02 | 在 `internal/service/moderation` 实现高性能敏感词检测器：构建双数组 AC 自动机，支持 10 万+ 敏感词毫秒级多模式匹配，命中敏感词自动打标并根据风险权重自动判定拦截；单元测试覆盖 | `TODO` |
+| **M9-04** | 运营管理后台控制器与全路由挂载 | M9-03 | 在 `internal/http/admin` 暴露 `GET /api/v1/admin/reviews`、`POST /api/v1/admin/videos/:id/review`、`POST /api/v1/admin/videos/:id/takedown`、`POST /api/v1/admin/users/:id/ban`；绑定管理员 RBAC 权限校验；依赖装配与 Handler 单测 | `TODO` |
+| **M9-05** | M9 内容审核与合规治理全生命周期 E2E 集成测试 | M9-04 | 在 `test/e2e/moderation_lifecycle_test.go` 中验证黑盒测试：敏感词自动命中打标与风险阻断 → 先发后审与先审后发双轨流转 → 运营审核驳回自动下架视频与撤销时间线索引 → 违规账号封禁后鉴权即时失效 → `make vet && make test` 全量绿灯回归 | `TODO` |
+
+---
+
+## 十七、M10 全栈 Web 短视频流式演示客户端任务明细
+
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M10-01**| 响应式短视频流 Web 播放器脚手架 | M2, M3 | 在 `web/` 下构建响应式 HTML5 极简短视频播放界面（无厚重前端构建依赖）；支持鼠标滚轮与移动端触屏上下滑切视频；集成 HTTP 206 Partial Content 分段流式解码播放与首屏静音自动起播 | `TODO` |
+| **M10-02**| 互动交互动效与实时 SSE 弹窗集成 | M4, M5, M10-01 | 接入点赞/关注双向绑定；双击屏幕触发红心飞出动画；接入 `/api/v1/notifications/stream` SSE 长连接，实现新点赞/新评论右上角 Toast 浮窗与未读红点毫秒级闪烁 | `TODO` |
+| **M10-03**| 端侧播放 QoS 实时观测大盘看板 | M6, M10-02 | 自动采集起播首帧耗时、卡顿事件与播放时长并向 `/api/v1/playback/events` 自动上报；在前端悬浮抽屉中展示实时 QoS 看板（当前预加载策略、卡顿率、首帧耗时直方图） | `TODO` |
+
 
 
 

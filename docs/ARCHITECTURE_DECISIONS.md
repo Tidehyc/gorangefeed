@@ -325,6 +325,92 @@ sequenceDiagram
 | `playback_completion_total` | Counter | `network_type` | 视频完整播放达标总次数 |
 | `playback_sessions_total` | Counter | `network_type` | 播放会话总上报次数（用于计算完播率与卡顿率） |
 
+---
 
+## 六、二期进阶架构对比与技术决策（M7 ~ M10）
 
+### 6.1 跨项目对比与方案优化决策
 
+| 维度 | `feedsystem_video_go` 实现 | `GCFeed` 实现 | 工业界最佳实践（TikTok / Bilibili） | GoRangeFeed 二期优化决策（取长补短与落地） |
+|---|---|---|---|---|
+| **草稿箱与定时发布引擎 (M7)** | 仅支持单次即时发布，无草稿状态机，无定时排期发布功能。 | 无创作者发布体系。 | 创作者后台完备支持草稿保存、多次修改与指定未来时间定时发布（Scheduled Publishing），调度引擎精确到秒级。 | **创作者草稿与定时排期调度器**：设计 `drafts` 表与 `scheduled_tasks` 任务池；支持草稿存取改删；基于 Redis ZSet 延迟队列（score 为计划发布 Unix 时间戳）+ 分布式锁，Worker 毫秒级准点拉取并触发发布事件入 Outbox。 |
+| **单调发布序号与时序空洞根治 (M7)** | 依赖 MySQL `video.id`（自增主键）或 `created_at` 作为时间线排序与游标，乱序长事务与延时发布必定导致“永久漏刷空洞”。 | 仅使用简单的自增 ID，未解决乱序提交。 | 彻底解耦存储主键与业务时序，引入全局单调递增发布序列号（`publish_seq`），在最终发布瞬间单点发号打标。 | **分布式单调发号器与发布序号体系**：基于 Redis INCR 实现单调递增发号器；在 Outbox 消费发布事件的原子瞬间为视频打标 `publish_seq`；时间线 ZSet score 及游标统一改造为 `publish_seq`，MySQL 查询走 `(published_at, id)` 复合游标，彻底根治时序空洞。 |
+| **视频收藏夹与播放历史 (M8)** | 仅有点赞关系，无收藏夹，无播放进度记录。 | 无互动资产体系。 | 收藏权重远超点赞（3~5倍）；支持默认收藏夹与多目录分类；播放历史支持滑动窗口保存与断点断续。 | **用户资产沉淀中心**：实现默认与自定义收藏夹（支持公开/私密）；实现基于 Redis ZSet 滑动窗口（保留最近 100 条）+ MySQL 异步持久化的播放历史中心，支持视频断点进度保存；收藏事件正向加权赋能热榜与推荐召回。 |
+| **内容合规与安全审核中台 (M9)** | 零审核，任何人发任何内容全网即时可见，存在严重合规风险。 | 无合规机制。 | 双轨制审核（新人先审后发，老作者先发后审）；自动化机审（敏感词 Trie/AC 自动机）+ 人工复审。 | **双轨制审核中台与敏感词引擎**：基于 Aho-Corasick 算法实现毫秒级敏感词检测；设计 `review_tasks` 状态机；提供运营管理后台接口（违规强制下架、用户封禁处罚）。 |
+| **前端短视频演示客户端 (M10)** | 纯后端项目，无任何前端可视化展示。 | 仅提供后端 Swagger。 | 具备轻量现代 Web 端，流畅展示手势切视频、双击点赞动画与实时弹窗。 | **全栈 Web 短视频交互 Demo**：在 `web/` 下提供响应式短视频流播放界面；打通 Range 分段视频起播、双击点赞红心、实时 SSE 通知浮窗展示与 QoS 监控面板。 |
+
+---
+
+### 6.2 关键架构设计：单调发布序号（`publish_seq`）与时序空洞（Sequence Gap）消除机制
+
+#### 为什么依赖 `video.id` 或 `created_at` 必出时序空洞？
+```mermaid
+sequenceDiagram
+    autonumber
+    participant T1 as 慢事务 T1 (大视频)
+    participant T2 as 快事务 T2 (短视频)
+    participant DB as MySQL 存储
+    participant Client as 客户端
+
+    Note over T1,DB: 时刻 1: T1 开始，获取自增 ID=100
+    Note over T2,DB: 时刻 2: T2 开始，获取自增 ID=101
+    T2->>DB: 时刻 3: T2 快速提交完成 (ID=101 落库)
+    Client->>DB: 时刻 4: 客户端刷新，拉取到最新 ID=101，更新本地游标 cursor=101
+    T1->>DB: 时刻 5: T1 慢事务终于提交完成 (ID=100 落库)
+    Client->>DB: 时刻 6: 客户端下拉翻页，请求 cursor < 101
+    Note over Client,DB: 致命问题：客户端仅拉取 ID < 101 的历史视频，但 ID=100 在时刻 4 之前未就绪，此时已经被客户端跳过！ID=100 成为永久漏看的“时序空洞”！
+```
+
+#### GoRangeFeed 的解决方案：Outbox 消费端原子发号
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Creator as 创作者
+    participant API as API 服务
+    participant Task as 定时任务/审核队列
+    participant Outbox as 本地消息表
+    participant Worker as Outbox 调度 Worker
+    participant SeqGen as Redis 分布式发号器
+    participant Timeline as Redis 时间线 (ZSet)
+    participant Client as 客户端
+
+    Creator->>API: 1. 提交视频或设定定时发布 (计划发布时间 T)
+    API->>Task: 2. 写入 drafts/scheduled_tasks (不占发布序号)
+    
+    Note over Task,Worker: 到达发布时刻 T (或审核通过)
+    Task->>Outbox: 3. 在同一事务内更新视频为 published 并写入 outbox (event: video.publish_ready)
+    Worker->>Outbox: 4. 抢占式租约调度拉取 publish_ready 事件
+    Worker->>SeqGen: 5. 原子 INCR seq:video:published -> 获取全局单调递增 publish_seq
+    Worker->>API: 6. 回写 MySQL videos.publish_seq
+    Worker->>Timeline: 7. ZADD feed:timeline:global (score=publish_seq, member=video_id)
+    Client->>Timeline: 8. 客户端分页严格基于 publish_seq 游标拉取，顺序绝对单调，彻底杜绝漏推空洞！
+```
+
+---
+
+### 6.3 M7 核心接口与契约规范
+
+| 业务域 | 方法 | 路径 | 鉴权方式 | 核心入参 / Body | 成功响应核心字段 |
+|---|---|---|---|---|---|
+| **创作中心** | `POST` | `/api/v1/creator/drafts` | JWTAuth | `title`, `description`, `play_url`, `cover_url`, `duration_ms` | `{ id: 1, title: "...", status: "draft" }` |
+| | `GET` | `/api/v1/creator/drafts` | JWTAuth | Query: `cursor`, `limit` | `{ items: [...], next_cursor: 123, has_more: false }` |
+| | `PUT` | `/api/v1/creator/drafts/:id` | JWTAuth | `title`, `description`, `play_url`, `cover_url` | `{ id: 1, updated_at: "..." }` |
+| | `DELETE` | `/api/v1/creator/drafts/:id` | JWTAuth | Path: `id` | `{ success: true }` |
+| | `POST` | `/api/v1/creator/publish-scheduled` | JWTAuth | `draft_id` (可选), `video_info`, `scheduled_at` (RFC3339) | `{ task_id: "uuid", scheduled_at: "...", status: "scheduled" }` |
+| | `GET` | `/api/v1/creator/scheduled-tasks` | JWTAuth | Query: `limit` | `{ items: [{ task_id, title, scheduled_at, status }] }` |
+| | `DELETE` | `/api/v1/creator/scheduled-tasks/:id`| JWTAuth | Path: `id` (取消定时发布并退回草稿) | `{ success: true }` |
+
+---
+
+### 6.4 M7 必测边界用例集合
+
+| 用例编号 | 用例主题 | 构造方式 | 预期断言 |
+|---|---|---|---|
+| **E2E-M7-01** | 草稿保存、编辑、列表与物理删除 | 创建草稿 → 修改草稿标题 → 游标拉取创作者草稿列表 → 删除草稿 | 草稿保存状态正确；修改即时生效；列表仅作者本人可见；删除后查询 404 |
+| **E2E-M7-02** | 草稿直接一键转发布 | 创建草稿后调用立即发布接口 | 草稿记录安全标记为 `published`；视频正式落入 `videos` 表并广播入时间线 |
+| **E2E-M7-03** | 定时发布排期与时间参数校验 | 提交计划发布时间早于当前时间、或者晚于当前时间 30 天 | 系统拦截并返回 400（必须是未来 5 分钟至 30 天以内的合法时间） |
+| **E2E-M7-04** | 定时发布准点触发与平滑调度 | 提交一个计划在 2 秒后发布的视频；启动调度 Worker | 2 秒前视频处于 `scheduled` 态，全局时间线不可见；2 秒后 Worker 自动扫描出队，自动转入发布流程 |
+| **E2E-M7-05** | 取消定时发布并回退草稿 | 提交定时发布任务；在触发之前调用取消接口 | 定时任务被取消，从 Redis 延迟队列移除，原草稿状态恢复为 `draft`，时间线绝不发布 |
+| **E2E-M7-06** | 分布式发号器 `publish_seq` 单调递增断言 | 模拟 50 个视频并发触发发布 | 所有发布的视频其 `publish_seq` 严格连续单调递增，无重复，无逆序 |
+| **E2E-M7-07** | 乱序提交下的时间线无漏翻页验证 | 故意使早生成的草稿在后时刻发布；客户端拉取全局流 | 依据 `publish_seq` 游标拉取，后发布的草稿准确出现在时间线最顶端，不会因主键 ID 较小被漏掉 |
+| **E2E-M7-08** | 并发 Worker 抢占式调度幂等防重复发布 | 2 个并发 Worker 同时扫描同一个到期的定时发布任务 | 基于 Redis 分布式锁与 MySQL 状态 CAS 校验，确保该任务仅被调度执行一次，绝不产生双重视频条目 |
