@@ -19,8 +19,10 @@ import (
 	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
+	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
 	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
+
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
@@ -141,16 +143,22 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	relationHandler := httprelation.NewHandler(relationSvc)
 
 	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	hotStore := persistencefeed.NewHotStore(rdb)
 	pageCache := persistencefeed.NewPageCacheRepository(rdb)
 	cardCache := persistencefeed.NewCardCacheRepository(rdb)
 	statCache := persistencefeed.NewStatCacheRepository(rdb)
 	exposureRepo := persistencefeed.NewExposureRepository(rdb)
 	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	recallEngine := servicefeed.NewMultiSourceRecallEngine(hotStore, timelineRepo, feedDBRepo)
+	diversifier := servicefeed.NewAuthorDiversifier()
 	feedSvc := servicefeed.NewService(
 		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
 		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
+		servicefeed.WithHotTimelineStore(hotStore),
+		servicefeed.WithRecommendDependencies(recallEngine, diversifier),
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
+
 
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
 		_ = feedSvc.AppendTimeline(ctx, videoID)
@@ -191,8 +199,10 @@ type e2eExtendedCtx struct {
 	InteractionSvc *serviceinteraction.Service
 	RelationSvc    *servicerelation.Service
 	FeedSvc        servicefeed.Service
+	HotStore       domainfeed.HotTimelineStore
 	OutboxRepo     domainoutbox.Repository
 }
+
 
 func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	t.Helper()
@@ -279,14 +289,19 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	relationHandler := httprelation.NewHandler(relationSvc)
 
 	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	hotStore := persistencefeed.NewHotStore(rdb)
 	pageCache := persistencefeed.NewPageCacheRepository(rdb)
 	cardCache := persistencefeed.NewCardCacheRepository(rdb)
 	statCache := persistencefeed.NewStatCacheRepository(rdb)
 	exposureRepo := persistencefeed.NewExposureRepository(rdb)
 	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	recallEngine := servicefeed.NewMultiSourceRecallEngine(hotStore, timelineRepo, feedDBRepo)
+	diversifier := servicefeed.NewAuthorDiversifier()
 	feedSvc := servicefeed.NewService(
 		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
 		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
+		servicefeed.WithHotTimelineStore(hotStore),
+		servicefeed.WithRecommendDependencies(recallEngine, diversifier),
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
@@ -329,8 +344,10 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		InteractionSvc: interactionSvc,
 		RelationSvc:    relationSvc,
 		FeedSvc:        feedSvc,
+		HotStore:       hotStore,
 		OutboxRepo:     persistenceoutbox.NewRepository(db),
 	}, cleanup
+
 }
 
 func parseJSONResponse(t *testing.T, w *httptest.ResponseRecorder, target interface{}) {
