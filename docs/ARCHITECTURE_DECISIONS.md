@@ -160,3 +160,141 @@ flowchart TD
 | **E2E-M4.5-04** | 同作者作品强制打散 | 作者 A 连续发布 4 条高热度视频；作者 B 发布 2 条视频；请求推荐流 | 返回列表中作者 A 的视频之间严格间隔不少于 3 条，绝不出现单一创作者连续霸屏 |
 | **E2E-M4.5-05** | 游客匿名推荐冷启动 | 匿名游客发起推荐流请求 | 顺利返回最新与探索混合候选，无需曝光去重过滤，Dynamic Hydration 注入 `is_liked=false, is_followed=false` |
 | **E2E-M4.5-06** | 候选不足平滑降级 | 清空热榜与时间线，使多路召回候选不足 `limit` 数量 | 系统自动回源 MySQL 最新冷数据补齐差额，接口稳定返回且 `has_more=false` |
+
+---
+
+## 四、M5 系统通知与分布式跨实例 SSE 架构决策
+
+### 4.1 跨项目对比与方案优化决策
+
+| 维度 | `feedsystem_video_go` 实现 | `GCFeed` 实现 | GoRangeFeed M5 优化决策（取长补短 & 升维演进） |
+|---|---|---|---|
+| **消息实体与领域抽象 (Domain Model)** | 实体结构扁平（`RecipientID`, `SenderID`, `Type`, `TargetID`, `Content`）；将点对点私信与通知混在不同包，领域职责模糊；直接在 GORM 模型上操作，无领域状态机与富文本规则。 | **【优点】** 采用 DDD 领域实体 `Message`，封装接收人、类型、标题、内容、`EventID`，并引入 `ActorID/Nickname/Avatar` 快照；<br>**【短板】** 缺少业务跳转目标信息（如视频 ID、评论 ID），私信与系统通知边界混淆。 | **【吸纳长处并增强】规范化 `Notification` 聚合根与业务元数据**：<br>1. 提炼通知实体：`ID`, `RecipientID`, `ActorID`, `Type` (`like`, `comment`, `follow`, `mention`, `system`), `TargetType` (`video`, `comment`, `user`), `TargetID`, `Title`, `Content`, `EventID`, `IsRead`, `CreatedAt`, `ReadAt`；<br>2. 领域层零外部依赖，严格封装 `MarkRead()` 状态机与富文本截断/校验规则；<br>3. 关联 Actor 动态装配与卡片摘要回填。 |
+| **事件驱动与消费去重 (Event & Idempotency)** | 在 Worker 中消费 RabbitMQ，查出目标作者后直接 `db.Create`；**无事件去重与幂等表**，网络重试或 Worker 重启时发生大量重复通知；无事务 Outbox 保障。 | **【优点】** 表级唯一索引 `uk_user_event(user_id, event_id)` 杜绝同一事件生成多条消息；<br>**【短板】** 依赖外部直接调 `/internal/messages` HTTP 接口写入，非消息队列驱动，高并发写会被阻塞。 | **【集两家之长】Outbox 事务解耦 + 消费端双层幂等**：<br>1. 复用 M4 Outbox 可靠事件（点赞 `interaction.liked`、评论 `interaction.commented`、关注 `relation.followed`）；<br>2. RabbitMQ Topic 消费；<br>3. 消费端基于 `consumed_events` 事务去重表 + `notifications` 联合唯一键 `uk_recipient_event (recipient_id, event_id)` 双重拦截重试投递，确保精确一次；<br>4. 自身操作严格过滤不发通知（`actor_id == recipient_id`）。 |
+| **评论 `@提及` 用户通知 (Mention Parsing)** | 完全不支持。 | 完全不支持。 | **【全新突破】正则解析 `@username` 异步派发（FR-NOT-07）**：<br>1. 消费评论事件时，正则提取所有 `@([a-zA-Z0-9_]+)` 用户名（去重并限制单条评论最多 10 人）；<br>2. 批量探测用户名对应的 `user_id`；<br>3. 过滤作者本人及视频作者（避免重复通知）；<br>4. 批量派发 `mention` 类型系统通知并触发 SSE 推送。 |
+| **分布式集群推流与频道选型 (Cluster SSE & Pub/Sub)** | **【严重缺陷】** 仅支持单机单进程内存推流；Worker 与 API 分离或横向扩容时推送必定静默丢失；无背压缓冲控制。 | 完全无实时推流能力，仅支持无状态客户端 HTTP 短轮询。 | **【吸纳长处并解耦】双层广播解耦（Redis Pub/Sub + API 本地 Hub）**：<br>1. 抽象通用 `Broadcaster` 接口（解耦驱动源，支持单机内存与 Redis 集群）；<br>2. Worker/API 在产生通知后统一向集中式主题 `channel.gorangefeed.notifications` 广播轻量信令；<br>3. 各 API 节点仅保持 1 条常驻 Redis 连接，收到信令后通过本地内存 `clients[recipient_id]` O(1) 匹配与本地分发，天然支持 N 节点水平扩容，杜绝订阅风暴。 |
+| **弱网重连与断线补拉 (Last-Event-ID Catch-up)** | **【严重缺陷】** 完全不支持。断开重连期间产生的所有通知全部丢失，只能手动调列表接口刷新。 | 无推送。游标分页按时间倒序。 | **【弥补短板】60s 重叠窗口 + 复合游标严格补拉**：<br>1. SSE 事件携带标准 `id: {createdAtMs}:{id}`；<br>2. 客户端断线重连携带 `Last-Event-ID`（或 Query `last_event_id`）；<br>3. 服务端解析时间戳回退 60 秒（`lastTime - 60s`），从 DB 检索 `(created_at, id) > (cursorTime-60s, cursorID)` 未读记录；<br>4. 内存去重后在握手成功后即刻优先补推历史事件，再接入实时通道，做到网络抖动 100% 不丢通知。 |
+| **Web 端 SSE 鉴权安全 (Auth & Ticket)** | **【高危缺陷】** 直接在 URL Query 中传递全功能 JWT Token（`?token=eyJ...`），长期有效 Token 极易泄露于反代日志、CDN 日志及浏览器历史中。 | 仅常规 API 请求头 `Bearer JWT`。 | **【工业级安全规范】短期一次性 Ticket 交换机制**：<br>1. 客户端在建立 SSE 连接前，先调用 `POST /api/v1/notifications/sse/ticket`（Header 携带合法 JWT）；<br>2. 服务端生成 60s 有效期、一次性使用的安全随机 Ticket（UUID），存入 Redis `sse:ticket:{ticket} -> userID`；<br>3. 客户端使用 `GET /api/v1/notifications/stream?ticket={ticket}` 握手，服务端验证后立即删除（Single-use），避免泄露长期 Token。支持普通客户端直接使用 Header。 |
+| **节点停机与客户端平滑迁移 (Graceful Drain)** | 进程被直接杀死，客户端连接异常断开（TCP Reset）；无平滑迁移引导。 | 无长连接状态。 | **【高可用停机握手】平滑 Drain + 自动漂移**：<br>1. 节点收到 SIGTERM 信号时，先向所有本地活跃连接下发注释行 `: server_restarting\n\n` 并关闭通道；<br>2. 浏览器 EventSource 捕获连接关闭事件后自动触发指数退避重连；<br>3. 负载均衡网关（Nginx/SLB）自动将重连流量分流至存活节点；<br>4. 新节点基于 `Last-Event-ID` 无缝补齐停机窗口内的通知，整个迁移过程对用户完全透明。 |
+| **未读计数与标记已读 (Unread & MarkRead)** | `POST /markRead` 直接操作 GORM 更新，未读计数每次直接 `Count(*)`，无批处理索引优化。 | 接口支持单条与批量已读，但全表 `COUNT(*)` 缺少 `is_read` 联合索引加速。 | **精准复合索引 + 批量原子已读**：<br>1. 在 `notifications` 建立专用复合索引 `(recipient_id, is_read)` 与 `(recipient_id, created_at DESC, id DESC)`；<br>2. `GET /unread-count` 严格索引覆盖毫秒级统计；<br>3. `POST /read` 支持批量传入 `notification_ids` 或一键全读，事务原子更新并回执影响条数。 |
+
+### 4.2 数据库迁移表结构与核心索引设计
+
+| 迁移文件 | 数据表 | 核心字段说明 | 核心索引设计与优化目的 |
+|---|---|---|---|
+| **000009_create_notifications_table** | `notifications` | `id(PK)`: 主键自增<br>`recipient_id`: 接收人 UID<br>`actor_id`: 触发人 UID<br>`type`: 通知类型 (`like` / `comment` / `follow` / `mention` / `system`)<br>`target_type`: 目标类型 (`video` / `comment` / `user`)<br>`target_id`: 目标主体主键 ID<br>`title`: 简要通知标题 (VARCHAR 128)<br>`content`: 通知富文本正文或摘要 (VARCHAR 1024)<br>`event_id`: 业务事件全局唯一 UUID<br>`is_read`: 是否已读 (TINYINT 1)<br>`created_at`: 创建时间 (DATETIME(3))<br>`read_at`: 标记已读时间 (DATETIME(3)) | `UNIQUE KEY uk_recipient_event (recipient_id, event_id)`：杜绝同一事件给同一用户生成重复通知（幂等消费兜底）；<br>`KEY idx_recipient_created_id (recipient_id, created_at DESC, id DESC)`：专供通知列表时间倒序游标分页与断线重连补拉查询；<br>`KEY idx_recipient_unread (recipient_id, is_read)`：覆盖索引，支撑未读计数高频极速统计（`is_read = 0`）；<br>`KEY idx_actor (actor_id)`：支撑按触发人追溯、审计与清理。 |
+
+### 4.3 核心接口与 SSE 通信规范
+
+#### 1. RESTful 核心接口定义
+
+| 业务域 | 方法 | 路径 | 鉴权方式 | 核心入参 / Query | 成功响应核心字段 |
+|---|---|---|---|---|---|
+| **通知列表** | `GET` | `/api/v1/notifications` | JWTAuth | `cursor` (Base64 string), `limit` (默认 20, 最大 100), `type` (可选筛选) | `{ items: [...], next_cursor: "ey...", has_more: true }` |
+| **未读计数** | `GET` | `/api/v1/notifications/unread-count` | JWTAuth | 无 | `{ unread_count: 5 }` |
+| **单条标记已读**| `PATCH`| `/api/v1/notifications/:id/read` | JWTAuth | Path: `id` | `{ success: true, is_read: true }` |
+| **一键全部已读**| `POST` | `/api/v1/notifications/read-all` | JWTAuth | 无 | `{ marked_count: 5 }` |
+| **置换 SSE Ticket** | `POST` | `/api/v1/notifications/sse/ticket` | JWTAuth | 无 | `{ ticket: "3fa85f64-5717-4562-b3fc-2c963f66afa6", expires_in: 60 }` |
+| **SSE 实时通知流** | `GET` | `/api/v1/notifications/stream` | Ticket / JWTAuth | Query `ticket` 或 Header `Authorization`, Header/Query `Last-Event-ID` | SSE 流式长连接（`Content-Type: text/event-stream`） |
+
+#### 2. 分布式集群通信拓扑与广播流转机制
+
+```mermaid
+flowchart TD
+    subgraph EventSources [事件驱动生产者]
+        W[Worker 消费者集群]
+        A2[API 节点 2]
+    end
+
+    subgraph RedisCluster [Redis 消息总线]
+        PubSub[("Redis Pub/Sub<br>channel.gorangefeed.notifications")]
+    end
+
+    subgraph APIServers [API 接入集群 (横向扩展)]
+        subgraph Node1 [API 节点 1 (Node A)]
+            Sub1[Redis Pub/Sub 监听协程]
+            Hub1["本地内存 Hub<br>clients[UID] -> []chan"]
+            Client1["客户端 1 (用户 U1)"]
+            Sub1 -->|收到广播 O(1) 查找| Hub1
+            Hub1 -->|命中本地| Client1
+        end
+
+        subgraph Node2 [API 节点 2 (Node B)]
+            Sub2[Redis Pub/Sub 监听协程]
+            Hub2["本地内存 Hub<br>clients[UID] -> []chan"]
+            Client2["客户端 2 (用户 U2)"]
+            Sub2 -->|收到广播 O(1) 查找| Hub2
+            Hub2 -->|命中本地| Client2
+        end
+    end
+
+    W -->|PUBLISH notify| PubSub
+    A2 -->|PUBLISH notify| PubSub
+    PubSub -.->|广播下发| Sub1
+    PubSub -.->|广播下发| Sub2
+```
+
+#### 3. SSE 安全握手、断线补拉与优雅漂移时序（Lifecycle Sequence）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as 客户端 (Web / App)
+    participant API1 as API Node 1 (SSE Hub)
+    participant API2 as API Node 2 (SSE Hub)
+    participant Redis as Redis (Pub/Sub & Ticket)
+    participant DB as MySQL (notifications)
+    participant Worker as Worker (Consumer)
+
+    Note over Client,API1: 阶段一：建立安全 SSE 握手
+    Client->>API1: 1. POST /api/v1/notifications/sse/ticket (Header: Bearer JWT)
+    API1->>Redis: SET sse:ticket:{uuid} {uid} EX 60
+    API1-->>Client: 返回 { ticket: uuid, expires_in: 60 }
+    Client->>API1: 2. GET /api/v1/notifications/stream?ticket={uuid}&Last-Event-ID={lastCreatedAtMs}:{lastID}
+    API1->>Redis: Lua: GET & DEL sse:ticket:{uuid} (一次性消费)
+
+    Note over Client,API1: 阶段二：弱网断线 60s 窗口历史补拉
+    alt 携带 Last-Event-ID
+        API1->>DB: 查询 (created_at, id) > (lastCreatedAtMs-60s, lastID) 且未读
+        DB-->>API1: 返回 missed_notifications
+        loop 补推遗漏事件
+            API1-->>Client: id: {createdAtMs}:{id}\nevent: notification\ndata: {...}\n\n
+        end
+    end
+
+    Note over Client,API1: 阶段三：进入活跃在线实时监听
+    API1->>API1: 将客户端 chan 注册进 local clients[uid]
+    loop 每 15 秒保活
+        API1-->>Client: : keepalive\n\n
+    end
+
+    Note over Worker,Client: 阶段四：跨实例分布式广播
+    Worker->>DB: 消费 RabbitMQ 事件落库 notifications
+    Worker->>Redis: PUBLISH channel.gorangefeed.notifications {recipient_id, id, type, ...}
+    Redis-->>API1: Node 1 监听到广播事件，命中本地 clients[recipient_id]
+    API1-->>Client: id: {createdAtMs}:{id}\nevent: notification\ndata: {...}\n\n
+
+    Note over Client,API2: 阶段五：节点停机平滑迁移与漂移补拉
+    API1->>Client: : server_restarting\n\n (关闭连接)
+    Client->>API2: 自动重连 Node 2，携带 Last-Event-ID
+    API2->>DB: 从 MySQL 补拉停机窗口内的未送达通知
+    API2-->>Client: 补推历史通知，无缝接入 Node 2 实时监听
+```
+
+### 4.4 必测边界用例集合
+
+| 用例编号 | 用例主题 | 构造方式 | 预期断言 |
+|---|---|---|---|
+| **E2E-M5-01** | 点赞/关注异步通知落库 | 用户 A 点赞用户 B 视频，用户 A 关注用户 B；Worker 异步消费 | B 的通知列表中准确生成点赞与关注 2 条通知，`actor_id` 为 A；未读数自增 2 |
+| **E2E-M5-02** | 自身操作免自扰过滤 | 用户 A 点赞自己的视频，评论自己的视频 | 系统严格拦截，绝不向用户 A 发送点赞或评论通知 |
+| **E2E-M5-03** | 评论 `@提及` 用户通知派发 | 用户 A 在视频评论区输入 `"精彩！@alice @bob 快来看"`；Worker 消费 | `alice` 与 `bob` 收到 `type=mention` 的系统通知；视频作者收到 `type=comment` 通知；自提及被安全过滤 |
+| **E2E-M5-04** | 未读计数与单条/一键已读 | 用户 A 拥有 3 条未读通知；先调用单条标记已读，再调用全部标记已读 | 首次未读数降为 2；一键全部标记已读后未读数严格变为 0；重复标记保持幂等 |
+| **E2E-M5-05** | 通知列表复合游标倒序翻页 | 构造 15 条通知；分页拉取（limit=10）；提取 `next_cursor` 拉取第二页 | 第一页返回最新 10 条，第二页返回剩余 5 条；按时间倒序无重无漏 |
+| **E2E-M5-06** | SSE Ticket 鉴权与单次防重用 | 用户 A 申请 Ticket 后成功建立 SSE 连接；再次使用相同 Ticket 发起第二个连接 | 首次连接建立成功（200 OK text/event-stream）；第二次连接被拦截并返回 401（Ticket 已消费失效） |
+| **E2E-M5-07** | 在线实时推送秒级到达 | 用户 B 建立 SSE 流长连接；用户 A 点赞用户 B 视频；Outbox 调度与 Worker 消费 | 用户 B 的 SSE 连接在 100ms 内收到该通知推流，内容完整 |
+| **E2E-M5-08** | 弱网断线携带 Last-Event-ID 补拉 | 用户 B 断开 SSE 10 秒；期间用户 A 发送 2 条互动；B 重新发起 SSE 连接并携带 `Last-Event-ID` | 握手建立后，服务端立刻补推断线期间的 2 条通知，随后正常接收新事件，通知零丢失 |
+| **E2E-M5-09** | 跨节点多实例实时广播 | 启动 Node 1 与 Node 2；用户 A 连接在 Node 1；在 Node 2 触发点赞用户 A 视频 | Node 2 写入 DB 并发布 Redis Pub/Sub；Node 1 成功接收广播并在 100ms 内向用户 A 推流，非本地节点 O(1) 过滤丢弃 |
+| **E2E-M5-10** | 节点停机优雅 Drain 与跨节点漂移 | 用户 A 连接在 Node 1；优雅关闭 Node 1（发送 SIGTERM）；在停机期间产生 2 条通知；客户端重连至 Node 2 并携带 `Last-Event-ID` | Node 1 正确发送 `: server_restarting` 并平滑断开；Node 2 成功接管重连，补推 2 条未读通知后继续接收实时推流 |
+
+
+

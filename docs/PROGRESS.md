@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M4.5 实时热榜与轻量推荐流已全部闭环验收（M4.5-01~08 全量交付），准备推进 M5 系统通知与单实例 SSE** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） |
-| **进行中任务** | M4.5 实时热榜与轻量推荐流（进阶流）全链路闭环，通过 6 组端到端生命周期验证（滑动窗口打分扣分、as_of 稳定分页防滑、曝光过滤已看、同作者打散与冷启动回源）；准备推进 M5 系统通知与单实例 SSE |
+| **当前阶段** | **M5 系统通知与单实例 SSE 及 M5.5 跨实例 SSE 广播骨架规划完成，准备推进落地实现（M5-01~08 & M5.5-01~05）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：0 / 8 项（0%） · M5.5 阶段：0 / 5 项（0%） |
+| **进行中任务** | 已完成 M5 及 M5.5 跨项目技术对比（与 feedsystem_video_go 及 GCFeed 对比）、架构决策（ADR）、数据库迁移设计、跨进程与跨节点 Redis Pub/Sub 广播机制、断线补拉协议与 M5-01~08、M5.5-01~05 任务骨架分解；准备推进落地实现 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M5 系统通知与单实例 SSE：编写 000008_create_notifications_table 迁移脚本，定义通知领域模型实体与仓储契约 |
+| **下一步行动** | 推进 M5-01：编写 000009_create_notifications_table 迁移脚本，定义通知持久化表、幂等约束与覆盖索引 |
 
 
 
@@ -43,9 +43,9 @@
 | **M3** | 全局最新流与播放曝光上报 | FR-FEED-01, 03, 04, FR-VID-08 | `DONE` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确；上报播放行为驱动 `view_count` 自增与曝光打底 |
 | **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `DONE` | 点赞/评论/关注事务一致性与计数防丢；客户端唯一键评论幂等防重放与热评排序；互粉好友判定；Outbox 本地消息表分布式租约调度与 RabbitMQ 可靠投递；消费端事务去重；关注流推拉结合（普通写扩散+大V读扩散多路归并）与冷启动回源；全局流 L1 骨架共享与个性化互动态动态装配；历史累计高赞榜复合游标分页 |
 | **M4.5**| 实时热榜与轻量推荐流（进阶流） | FR-FEED-05, FR-FEED-06 | `DONE` | 60分钟滑动窗口互动热度衰减（ZSet分钟桶）；as_of+offset稳定快照分页；热门/最新/探索多路召回、曝光去重与同作者打散；全生命周期 E2E 测试绿灯 |
-| **M5** | 系统通知与单实例 SSE | FR-NOT-01~05, FR-NOT-07 | `TODO` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；SSE 在线推送与断线补拉验证完整 |
-| **M5.5**| 跨实例 SSE 广播（二期） | FR-NOT-06 | `TODO` | 多实例下 Pub/Sub 广播到达；断连期间通知通过补拉恢复 |
+| **M5** | 系统通知与分布式跨实例 SSE | FR-NOT-01~07 | `TODO` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；基于 Redis Pub/Sub 的跨实例广播秒级到达；SSE 在线推送与 60s 重叠窗口基于 Last-Event-ID 断线补拉验证完整 |
 | **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `TODO` | 核心链路达到性能设计指标或产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
+
 
 ---
 
@@ -173,18 +173,25 @@
 
 ---
 
-## 十一、后续里程碑任务明细规划
+## 十二、M5 系统通知与分布式跨实例 SSE 任务明细
 
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M5-01** | 系统通知数据表迁移与复合索引设计 | M0-05 | 编写 `000009_create_notifications_table` 迁移脚本；包含 `id`, `recipient_id`, `actor_id`, `type`, `target_type`, `target_id`, `title`, `content`, `event_id`, `is_read`, `created_at`, `read_at`；建立 `UNIQUE(recipient_id, event_id)` 幂等消费防重约束、`(recipient_id, created_at DESC, id DESC)` 倒序翻页索引、`(recipient_id, is_read)` 未读计数覆盖索引；通过 migrate up/down 回滚验证 | `TODO` |
+| **M5-02** | 通知领域模型、枚举与仓储契约定义 | — | 在 `internal/domain/notification` 定义 `Notification` 聚合根（包含 `MarkAsRead()` 状态机流转与富文本截断规则）、`NotificationType` 与 `TargetType` 枚举、`NotificationCursor` 游标值对象、`Repository` 接口契约与领域错误常量；保持零外部依赖与单元测试覆盖 | `TODO` |
+| **M5-03** | 通知仓储持久化与覆盖索引查询实现 | M5-01, M5-02 | 在 `internal/infra/persistence/notification` 基于 GORM 实现 `Repository`；实现基于 `(created_at, id) < (cursor_created_at, cursor_id)` 的复合游标翻页查询与动态 Actor 快照回填；实现基于 `(recipient_id, is_read)` 覆盖索引的高性能未读计数统计；实现单条与一键批量标记已读（原子更新 `is_read=true, read_at=NOW()`）；实现断线补拉查询 `ListAfter` | `TODO` |
+| **M5-04** | 评论 `@提及` 用户解析器与通知服务 | M5-02 | 在 `internal/service/notification` 实现提及解析器：正则提取评论中的 `@username`（去重并限制上限 10 人）；联动 `accountRepo` 批量查询目标用户 ID；过滤自提及与视频作者自身；批量生成 `mention` 类型系统通知并持久化落库；覆盖单测 | `TODO` |
+| **M5-05** | 分布式事件广播器抽象与 Redis Pub/Sub 引擎实现 | M0-06 | 抽象通用 `Broadcaster` 接口（`Publish`, `Subscribe`, `Close`）；在 `internal/infra/redis` 实现 `RedisBroadcaster`，订阅集中式广播主题 `channel.gorangefeed.notifications`；提供 `MemoryBroadcaster` 供本地单机与轻量单测使用；支持断线自动重试与重新订阅 | `TODO` |
+| **M5-06** | RabbitMQ 通知消费者与跨进程 Redis Pub/Sub 事件广播 | M4-07, M5-03~05 | 在 `internal/service/notification` 实现 `NotificationConsumer`：订阅 `interaction.liked`、`interaction.commented`、`relation.followed` 等事件；过滤自身操作防自扰；关联视频/评论作者并触发落库与 `@mention` 派发；依托消费端去重表与唯一键保障幂等；落库成功后调用 `Broadcaster.Publish` 向 Redis 广播信令；在 `cmd/worker/main.go` 中挂载并启动 | `TODO` |
+| **M5-07** | 分布式 SSE Hub 连接池、短期 Ticket 安全鉴权与 60s 重叠窗口断线补拉引擎 | M0-06, M5-02, M5-03, M5-05 | 在 `internal/service/notification` 实现 `SSEHub`：维护内存活跃客户端连接池（通道缓冲 64，溢出主动剔除断开）；常驻协程监听 Redis 广播频道并在本地内存 `clients[uid]` 执行 O(1) 匹配投递；实现 15s 定时心跳注释（`: keepalive\n\n`）；实现基于 Redis 的短期一次性 Ticket 交换与安全销毁（`sse:ticket:{uuid} -> uid`, EX 60s，Lua 原子消费）；实现 `Last-Event-ID` 解析与 60s 重叠窗口回退查询，在连接建立时优先补推遗漏历史通知再接入实时通道 | `TODO` |
+| **M5-08** | 节点停机平滑 Drain、在线状态心跳与 Prometheus 大盘指标 | M5-07 | 维护节点标识 `node_id`（主机名+随机 UUID 码）；通过 Redis Hash 定期上报活跃长连接数（TTL 30s）；导出 Prometheus 指标：`sse_connected_clients`、`sse_broadcast_received_total`、`sse_broadcast_sent_total`、`sse_dispatch_latency_seconds`；实现优雅退出协同：API 实例接收 SIGTERM 信号时，先向所有本地活跃 SSE 客户端推送协议级注释行通知 `: server_restarting\n\n` 并平滑关闭长连接，引导客户端自动漂移重连存活节点 | `TODO` |
+| **M5-09** | 通知 HTTP 控制器、SSE 流路由与全路由装配 | M5-06~08 | 在 `internal/http/notification` 暴露 `GET /api/v1/notifications`、`GET /api/v1/notifications/unread-count`、`PATCH /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`、`POST /api/v1/notifications/sse/ticket`、`GET /api/v1/notifications/stream`；统一响应信封与错误码；绑定 JWTAuth 与 Ticket 鉴权；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `TODO` |
+| **M5-10** | M5 端到端通知闭环、断线补拉与多实例集群广播全生命周期 E2E 集成测试 | M5-09 | 在 `test/e2e/notification_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证点赞/评论/关注驱动通知异步落库与自操作过滤 → 评论 `@提及` 用户生成 mention 通知 → 未读计数与单条/一键已读原子流转 → 通知列表复合游标无重无漏翻页 → SSE Ticket 安全置换与防二次使用 → 模拟用户在线 SSE 实时接收通知推送（端到端 < 100ms） → 模拟断线 10s 期间产生新通知并携带 Last-Event-ID 完整补拉无遗漏 → 启动双节点模拟跨节点 Redis 广播到达与节点停机优雅漂移接管 → `make vet && make test` 全量绿灯回归 | `TODO` |
 
-- **M5 系统通知与单实例 SSE**：
-  - 系统通知明细表（`notifications`）与复合索引设计；
-  - Outbox 异步消费生成点赞/评论/关注通知，自身操作不自通知；
-  - **评论解析 `@username` 异步派发提及通知（Mention Notification）**；
-  - 未读通知计数与游标列表查询、单条/一键已读；
-  - SSE Hub 在线推送、短期 Ticket 安全鉴权（防 URL Query 泄露长期 Token）、60s 重叠窗口基于 `Last-Event-ID` 断线补拉。
-- **M5.5 跨实例 SSE 广播（二期）**：
-  - 基于 Redis Pub/Sub（频道 `notify:{userID}`）实现多 API 实例间的跨节点广播分发；
-  - 弱网波动靠 60s 窗口补拉兜底。
+---
+
+## 十三、后续里程碑任务明细规划
+
 - **M6 性能压测与播放 QoS 体验监控**：
   - 核心读写链路（最新流、热榜流、推荐流、并发点赞、Outbox 吞吐）万级 QPS 极限压测，产出 Benchmark 分析报告；
   - **端侧播放体验支持**：下发端侧滑动预加载建议条数与缓冲阈值（`/api/v1/playback/config`）；收集播放卡顿率、首帧耗时与完播率上报，导出 Prometheus 监控大盘。
@@ -195,3 +202,6 @@
   - 内容安全审核流水线（发布进入待审态 `review_tasks`，机器初审评分 + 人工判定）；
   - 管理员违规强制下架与用户封号后台接口；
   - 视频收藏夹（Favorite）与用户点对点私信系统（DM）。
+
+
+
