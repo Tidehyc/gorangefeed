@@ -181,3 +181,64 @@ func (h *Handler) GetLikeRankFeed(c *gin.Context) {
 
 	response.OK(c, page)
 }
+
+// GetHotFeed handles GET /api/v1/feed/hot.
+// Retrieves the real-time sliding hot feed aggregated over a 60-minute window with as_of stable snapshot pagination.
+func (h *Handler) GetHotFeed(c *gin.Context) {
+	viewerID := c.GetInt64(middleware.ContextKeyUserID)
+
+	cursor := strings.TrimSpace(c.DefaultQuery("cursor", ""))
+
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid limit"))
+		return
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	page, err := h.svc.GetHotFeed(c.Request.Context(), viewerID, cursor, limit)
+	if err != nil {
+		if errors.Is(err, domainfeed.ErrInvalidHotCursor) || errors.Is(err, domainfeed.ErrInvalidLimit) {
+			response.Fail(c, response.ErrInvalidParam(err.Error()))
+			return
+		}
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, page)
+}
+
+// GetRecommendFeed handles GET /api/v1/feed/recommend.
+// Retrieves personalized or guest recommended videos via multi-source recall, exposure filtering and author diversification.
+func (h *Handler) GetRecommendFeed(c *gin.Context) {
+	viewerID := c.GetInt64(middleware.ContextKeyUserID)
+
+	cursor := strings.TrimSpace(c.DefaultQuery("cursor", ""))
+
+	limitStr := c.DefaultQuery("limit", "10")
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit <= 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid limit"))
+		return
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	page, err := h.svc.GetRecommendFeed(c.Request.Context(), viewerID, cursor, limit)
+	if err != nil {
+		if errors.Is(err, domainfeed.ErrInvalidRecommendCursor) || errors.Is(err, domainfeed.ErrInvalidLimit) {
+			response.Fail(c, response.ErrInvalidParam(err.Error()))
+			return
+		}
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, page)
+}
+

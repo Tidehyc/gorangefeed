@@ -22,11 +22,12 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M4.5 实时热榜与轻量推荐流推进中（M4.5-01~06 已闭环验收，准备推进 M4.5-07 控制器与路由装配）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：6 / 8 项（75.0%） |
-| **进行中任务** | 已落地领域模型契约、Redis 分钟桶 Store 与 as_of 稳定快照聚合、RabbitMQ 互动打分消费者、多路召回推荐引擎（热门50%+最新30%+探索20%）、近期曝光过滤与同作者滑动窗口打散器、业务服务层 GetHotFeed/GetRecommendFeed 编排与平滑降级；准备推进 M4.5-07 HTTP 控制器、透明游标编解码与全路由装配 |
+| **当前阶段** | **M4.5 实时热榜与轻量推荐流推进中（M4.5-01~07 已闭环验收，准备推进 M4.5-08 全生命周期 E2E 集成测试）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：7 / 8 项（87.5%） |
+| **进行中任务** | 已落地领域模型契约、Redis 分钟桶 Store 与 as_of 稳定快照聚合、RabbitMQ 互动打分消费者、多路召回推荐引擎、近期曝光过滤与同作者滑动窗口打散器、业务服务层编排、GET /api/v1/feed/hot 与 GET /api/v1/feed/recommend 控制器、SoftJWTAuth 软鉴权挂载与全路由装配；准备推进 M4.5-08 全生命周期 E2E 集成测试 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M4.5-07：在 internal/http/feed 增加 GET /api/v1/feed/hot 与 GET /api/v1/feed/recommend，挂载 SoftJWTAuth，装配 API 路由并编写 Handler 单测 |
+| **下一步行动** | 推进 M4.5-08：在 test/e2e/hot_recommend_lifecycle_test.go 中编写完整黑盒 E2E 测试集，全量跑通打分沉淀、快照分页防滑、曝光过滤已看、同作者打散与冷启动平滑降级 |
+
 
 
 ---
@@ -167,12 +168,13 @@
 | **M4.5-04** | 轻量多路召回引擎（MultiSourceRecallEngine）实现 | M3-02, M4.5-02 | 在 `internal/service/feed` 实现 `MultiSourceRecallEngine`：支持热门高质池（50% 从 Hot Window 提取）、最新时效池（30% 从 Global Timeline 提取）、探索随机池（20% 随机偏移采样）；各路并发获取并合并去重，候选不足时自动平滑互补 | `DONE` |
 | **M4.5-05** | 近期曝光过滤与同作者滑动窗口打散器实现 | M0-06, M4.5-01 | 在 `internal/infra/persistence/feed` 与 `internal/service/feed` 实现：<br>1. **曝光过滤器**：基于 Redis Set `reco:exposed:{uid}`（TTL 72h），通过 `Pipeline SMISMEMBER` 高速剔除登录用户近期已看视频；<br>2. **同作者打散器**：实现滑动窗口打散算法，保证单页输出中同一作者视频间隔 ≥ 3 条；候选不足时安全降级 | `DONE` |
 | **M4.5-06** | Feed 业务层热榜与推荐编排（ListHotFeed & ListRecommendFeed） | M4.5-02~05, M4-09 | 在 `internal/service/feed` 实现 `ListHotFeed` 与 `ListRecommendFeed`：Hot 流支持 `as_of + offset` 稳定快照翻页；Recommend 流支持多路召回+曝光去重+作者打散；统一步入 L3 视频卡片 MGET + L4 计数 MGET + Dynamic Hydration 个性化装配管道；软鉴权兼容游客与登录态；冷启动与 Redis 异常平滑回源 MySQL | `DONE` |
-| **M4.5-07** | HTTP 控制器、透明游标编解码与全路由装配 | M4.5-06 | 在 `internal/http/feed` 增加 `GET /api/v1/feed/hot` 与 `GET /api/v1/feed/recommend`；实现透明 Base64 JSON 游标编解码（内部封装 `scene`, `as_of`, `offset`, `page`, `seed` 等）；挂载 `SoftJWTAuth` 软鉴权中间件；在 `cmd/api/main.go` 中完成全依赖组装与路由注册；编写 Handler 单元测试 | `TODO` |
+| **M4.5-07** | HTTP 控制器、透明游标编解码与全路由装配 | M4.5-06 | 在 `internal/http/feed` 增加 `GET /api/v1/feed/hot` 与 `GET /api/v1/feed/recommend`；实现透明 Base64 JSON 游标编解码（内部封装 `scene`, `as_of`, `offset`, `page`, `seed` 等）；挂载 `SoftJWTAuth` 软鉴权中间件；在 `cmd/api/main.go` 中完成全依赖组装与路由注册；编写 Handler 单元测试 | `DONE` |
 | **M4.5-08** | M4.5 实时热榜与推荐流全生命周期 E2E 集成测试 | M4.5-07 | 在 `test/e2e/hot_recommend_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证互动事件驱动分钟桶热度累加与取消点赞扣分 → as_of 稳定快照分页无重无漏 → 播放行为沉淀曝光记录与二次推荐已看过滤 → 同一作者连续作品强制打散断言 → 游客（未登录）冷启动平滑降级断言 → `make vet && make test` 全量绿灯回归 | `TODO` |
 
 ---
 
 ## 十一、后续里程碑任务明细规划
+
 
 - **M5 系统通知与单实例 SSE**：
   - 系统通知明细表（`notifications`）与复合索引设计；

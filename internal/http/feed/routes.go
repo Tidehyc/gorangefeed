@@ -15,13 +15,16 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
 	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
 
-	// Feed endpoints (global, following, like-rank)
+	// Feed endpoints (global, following, like-rank, hot, recommend)
 	feedGroup := v1.Group("/feed")
 	{
 		feedGroup.GET("/global", softAuth, h.GetGlobalFeed)
 		feedGroup.GET("/following", jwtAuth, h.GetFollowingFeed)
 		feedGroup.GET("/like-rank", softAuth, h.GetLikeRankFeed)
+		feedGroup.GET("/hot", softAuth, h.GetHotFeed)
+		feedGroup.GET("/recommend", softAuth, h.GetRecommendFeed)
 	}
+
 
 	// Playback view reporting endpoint (FR-VID-08)
 	videoGroup := v1.Group("/videos")

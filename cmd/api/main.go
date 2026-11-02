@@ -124,16 +124,23 @@ func main() {
 	// 8. Assemble Feed Domain & Caches
 	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
 	timelineRepo := persistencefeed.NewTimelineStore(rdb)
+	hotStore := persistencefeed.NewHotStore(rdb)
 	pageCache := persistencefeed.NewPageCacheRepository(rdb)
+
 	cardCache := persistencefeed.NewCardCacheRepository(rdb)
 	statCache := persistencefeed.NewStatCacheRepository(rdb)
 	exposureRepo := persistencefeed.NewExposureRepository(rdb)
 	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
+	recallEngine := servicefeed.NewMultiSourceRecallEngine(hotStore, timelineRepo, feedDBRepo)
+	diversifier := servicefeed.NewAuthorDiversifier()
 	feedSvc := servicefeed.NewService(
 		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
 		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
+		servicefeed.WithHotTimelineStore(hotStore),
+		servicefeed.WithRecommendDependencies(recallEngine, diversifier),
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
+
 
 	// Hook into video publishing to append published videos to timeline
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {

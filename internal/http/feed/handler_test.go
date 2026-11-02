@@ -19,6 +19,8 @@ type mockFeedService struct {
 	recordViewFn        func(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
 	listFollowingFeedFn func(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error)
 	getLikeRankFeedFn   func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error)
+	getHotFeedFn        func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error)
+	getRecommendFeedFn  func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error)
 }
 
 func (m *mockFeedService) GetGlobalFeed(ctx context.Context, viewerID int64, cursor int64, limit int) (*domainfeed.FeedPage, error) {
@@ -58,6 +60,9 @@ func (m *mockFeedService) GetLikeRankFeed(ctx context.Context, viewerID int64, c
 }
 
 func (m *mockFeedService) GetHotFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error) {
+	if m.getHotFeedFn != nil {
+		return m.getHotFeedFn(ctx, viewerID, cursor, limit)
+	}
 	return &domainfeed.HotFeedPage{Items: []*domainfeed.FeedItem{}}, nil
 }
 
@@ -66,13 +71,15 @@ func (m *mockFeedService) ListHotFeed(ctx context.Context, viewerID int64, curso
 }
 
 func (m *mockFeedService) GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
+	if m.getRecommendFeedFn != nil {
+		return m.getRecommendFeedFn(ctx, viewerID, cursor, limit)
+	}
 	return &domainfeed.RecommendFeedPage{Items: []*domainfeed.FeedItem{}}, nil
 }
 
 func (m *mockFeedService) ListRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
 	return m.GetRecommendFeed(ctx, viewerID, cursor, limit)
 }
-
 
 func setupTestEngine(svc *mockFeedService) *gin.Engine {
 	gin.SetMode(gin.TestMode)
@@ -82,9 +89,12 @@ func setupTestEngine(svc *mockFeedService) *gin.Engine {
 	r.GET("/api/v1/feed/global", handler.GetGlobalFeed)
 	r.GET("/api/v1/feed/following", handler.GetFollowingFeed)
 	r.GET("/api/v1/feed/like-rank", handler.GetLikeRankFeed)
+	r.GET("/api/v1/feed/hot", handler.GetHotFeed)
+	r.GET("/api/v1/feed/recommend", handler.GetRecommendFeed)
 	r.POST("/api/v1/videos/:videoId/view", handler.RecordView)
 	return r
 }
+
 
 func TestHandler_GetGlobalFeed(t *testing.T) {
 	mockSvc := &mockFeedService{
@@ -289,4 +299,108 @@ func TestHandler_GetLikeRankFeed(t *testing.T) {
 		t.Fatalf("expected next_cursor=500_301, got %v", dataMap["next_cursor"])
 	}
 }
+
+func TestHandler_GetHotFeed(t *testing.T) {
+	mockSvc := &mockFeedService{
+		getHotFeedFn: func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.HotFeedPage, error) {
+			if cursor == "invalid-cursor-error" {
+				return nil, domainfeed.ErrInvalidHotCursor
+			}
+			return &domainfeed.HotFeedPage{
+				Items: []*domainfeed.FeedItem{
+					{ID: 501, Title: "Hot Rank Video 1"},
+					{ID: 502, Title: "Hot Rank Video 2"},
+				},
+				NextCursor: "eyJzY2VuZSI6ImhvdCIsImFzX29mIjoxNzMwMDAwMDAwLCJvZmZzZXQiOjJ9",
+				HasMore:    true,
+			}, nil
+		},
+	}
+
+	engine := setupTestEngine(mockSvc)
+
+	// 1. Success request
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/hot?limit=2", nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp response.Response
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	dataMap := resp.Data.(map[string]interface{})
+	if dataMap["has_more"] != true || dataMap["next_cursor"] == "" {
+		t.Fatalf("expected has_more=true and non-empty next_cursor, got: %+v", dataMap)
+	}
+
+	// 2. Invalid limit <= 0
+	reqBadLimit, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/hot?limit=0", nil)
+	wBadLimit := httptest.NewRecorder()
+	engine.ServeHTTP(wBadLimit, reqBadLimit)
+	if wBadLimit.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for 0 limit, got %d", wBadLimit.Code)
+	}
+
+	// 3. Invalid cursor
+	reqBadCursor, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/hot?cursor=invalid-cursor-error", nil)
+	wBadCursor := httptest.NewRecorder()
+	engine.ServeHTTP(wBadCursor, reqBadCursor)
+	if wBadCursor.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad hot cursor, got %d", wBadCursor.Code)
+	}
+}
+
+func TestHandler_GetRecommendFeed(t *testing.T) {
+	mockSvc := &mockFeedService{
+		getRecommendFeedFn: func(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
+			if cursor == "invalid-recommend-cursor" {
+				return nil, domainfeed.ErrInvalidRecommendCursor
+			}
+			return &domainfeed.RecommendFeedPage{
+				Items: []*domainfeed.FeedItem{
+					{ID: 701, Title: "Recommended Video 1"},
+				},
+				NextCursor: "eyJzY2VuZSI6InJlY29tbWVuZCIsInBhZ2UiOjIsInNlZWQiOjEyMzQ1Nn0=",
+				HasMore:    true,
+			}, nil
+		},
+	}
+
+	engine := setupTestEngine(mockSvc)
+
+	// 1. Success request
+	req, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/recommend?limit=10", nil)
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp response.Response
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	dataMap := resp.Data.(map[string]interface{})
+	if dataMap["has_more"] != true || dataMap["next_cursor"] == "" {
+		t.Fatalf("expected has_more=true and non-empty next_cursor, got: %+v", dataMap)
+	}
+
+	// 2. Invalid limit <= 0
+	reqBadLimit, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/recommend?limit=-5", nil)
+	wBadLimit := httptest.NewRecorder()
+	engine.ServeHTTP(wBadLimit, reqBadLimit)
+	if wBadLimit.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for negative limit, got %d", wBadLimit.Code)
+	}
+
+	// 3. Invalid cursor
+	reqBadCursor, _ := http.NewRequest(http.MethodGet, "/api/v1/feed/recommend?cursor=invalid-recommend-cursor", nil)
+	wBadCursor := httptest.NewRecorder()
+	engine.ServeHTTP(wBadCursor, reqBadCursor)
+	if wBadCursor.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad recommend cursor, got %d", wBadCursor.Code)
+	}
+}
+
 
