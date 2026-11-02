@@ -19,6 +19,7 @@ type mockVideoRepo struct {
 	findByAuthorAndIdempotencyKeyFn func(ctx context.Context, authorID int64, key string) (*domainvideo.Video, *domainvideo.VideoStats, error)
 	listByAuthorCursorFn            func(ctx context.Context, authorID int64, cursor int64, limit int) ([]*domainvideo.Video, []*domainvideo.VideoStats, int64, bool, error)
 	updateStatusFn                  func(ctx context.Context, id int64, authorID int64, status domainvideo.VideoStatus) error
+	updatePublishSeqFn              func(ctx context.Context, id int64, publishSeq int64) error
 }
 
 func (m *mockVideoRepo) CreateWithStats(ctx context.Context, video *domainvideo.Video, stats *domainvideo.VideoStats) error {
@@ -64,6 +65,13 @@ func (m *mockVideoRepo) ListByAuthorCursor(ctx context.Context, authorID int64, 
 func (m *mockVideoRepo) UpdateStatus(ctx context.Context, id int64, authorID int64, status domainvideo.VideoStatus) error {
 	if m.updateStatusFn != nil {
 		return m.updateStatusFn(ctx, id, authorID, status)
+	}
+	return nil
+}
+
+func (m *mockVideoRepo) UpdatePublishSeq(ctx context.Context, id int64, publishSeq int64) error {
+	if m.updatePublishSeqFn != nil {
+		return m.updatePublishSeqFn(ctx, id, publishSeq)
 	}
 	return nil
 }

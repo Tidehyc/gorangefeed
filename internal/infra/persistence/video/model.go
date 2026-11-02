@@ -17,6 +17,7 @@ type VideoModel struct {
 	DurationMs     int       `gorm:"column:duration_ms;not null;default:0"`
 	Status         int8      `gorm:"column:status;not null;default:1"`
 	IdempotencyKey *string   `gorm:"column:idempotency_key;type:varchar(128);default:null"`
+	PublishSeq     *int64    `gorm:"column:publish_seq;uniqueIndex:uk_publish_seq;default:null"`
 	PublishedAt    time.Time `gorm:"column:published_at;not null;default:CURRENT_TIMESTAMP(3)"`
 	CreatedAt      time.Time `gorm:"column:created_at;autoCreateTime"`
 	UpdatedAt      time.Time `gorm:"column:updated_at;autoUpdateTime"`
@@ -46,6 +47,10 @@ func toDomainVideo(m *VideoModel) *domainvideo.Video {
 	if m == nil {
 		return nil
 	}
+	var publishSeq int64
+	if m.PublishSeq != nil {
+		publishSeq = *m.PublishSeq
+	}
 	return &domainvideo.Video{
 		ID:             m.ID,
 		AuthorID:       m.AuthorID,
@@ -56,6 +61,7 @@ func toDomainVideo(m *VideoModel) *domainvideo.Video {
 		DurationMs:     m.DurationMs,
 		Status:         domainvideo.VideoStatus(m.Status),
 		IdempotencyKey: m.IdempotencyKey,
+		PublishSeq:     publishSeq,
 		PublishedAt:    m.PublishedAt,
 		CreatedAt:      m.CreatedAt,
 		UpdatedAt:      m.UpdatedAt,
@@ -84,6 +90,10 @@ func fromDomainVideo(v *domainvideo.Video) *VideoModel {
 	if pubAt.IsZero() {
 		pubAt = time.Now()
 	}
+	var pubSeq *int64
+	if v.PublishSeq > 0 {
+		pubSeq = &v.PublishSeq
+	}
 	return &VideoModel{
 		ID:             v.ID,
 		AuthorID:       v.AuthorID,
@@ -94,6 +104,7 @@ func fromDomainVideo(v *domainvideo.Video) *VideoModel {
 		DurationMs:     v.DurationMs,
 		Status:         int8(v.Status),
 		IdempotencyKey: v.IdempotencyKey,
+		PublishSeq:     pubSeq,
 		PublishedAt:    pubAt,
 	}
 }

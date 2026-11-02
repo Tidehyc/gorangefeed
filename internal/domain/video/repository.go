@@ -31,4 +31,7 @@ type Repository interface {
 
 	// UpdateStatus updates the video status. Enforces author authorization.
 	UpdateStatus(ctx context.Context, id int64, authorID int64, status VideoStatus) error
+
+	// UpdatePublishSeq updates the sequence number for an existing video.
+	UpdatePublishSeq(ctx context.Context, id int64, publishSeq int64) error
 }

@@ -46,6 +46,9 @@ func (r *gormRepository) CreateWithStatsAndOutbox(ctx context.Context, video *do
 
 		// Reflect generated ID and timestamps back to domain video
 		video.ID = m.ID
+		if m.PublishSeq != nil {
+			video.PublishSeq = *m.PublishSeq
+		}
 		video.PublishedAt = m.PublishedAt
 		video.CreatedAt = m.CreatedAt
 		video.UpdatedAt = m.UpdatedAt
@@ -226,5 +229,16 @@ func (r *gormRepository) UpdateStatus(ctx context.Context, id int64, authorID in
 		return fmt.Errorf("update video status error: %w", err)
 	}
 
+	return nil
+}
+
+func (r *gormRepository) UpdatePublishSeq(ctx context.Context, id int64, publishSeq int64) error {
+	result := r.db.WithContext(ctx).Model(&VideoModel{}).Where("id = ?", id).Update("publish_seq", publishSeq)
+	if result.Error != nil {
+		return fmt.Errorf("update publish_seq error: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return domainvideo.ErrVideoNotFound
+	}
 	return nil
 }

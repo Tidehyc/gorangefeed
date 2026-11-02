@@ -32,6 +32,7 @@ type Video struct {
 	DurationMs     int         `json:"duration_ms"`
 	Status         VideoStatus `json:"status"`
 	IdempotencyKey *string     `json:"idempotency_key,omitempty"`
+	PublishSeq     int64       `json:"publish_seq"`
 	PublishedAt    time.Time   `json:"published_at"`
 	CreatedAt      time.Time   `json:"created_at"`
 	UpdatedAt      time.Time   `json:"updated_at"`
