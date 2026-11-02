@@ -185,6 +185,49 @@ func main() {
 		}
 	}()
 
+	// 8.1 Initialize RabbitMQ Consumer for Real-Time Hot Rank Engagement Scoring
+	hotStore := persistencefeed.NewHotStore(rdb)
+	hotScoreConsumer, err := servicefeed.NewHotScoreConsumer(hotStore, deduplicator)
+	if err != nil {
+		l.Error("worker failed to initialize hot score consumer", "error", err)
+		os.Exit(1)
+	}
+
+	hotRankConsumer, err := rabbitmq.NewConsumer(
+		mqConn,
+		rabbitmq.ExchangeEvents,
+		rabbitmq.QueueHotRank,
+		[]string{
+			rabbitmq.RoutingKeyInteractionLiked,
+			rabbitmq.RoutingKeyInteractionUnliked,
+			rabbitmq.RoutingKeyInteractionCommented,
+			rabbitmq.RoutingKeyInteractionCommentDelete,
+			rabbitmq.RoutingKeyVideoViewed,
+			rabbitmq.RoutingKeyVideoCompleted,
+		},
+		20,
+	)
+	if err != nil {
+		l.Error("worker failed to initialize hot rank consumer", "error", err)
+		os.Exit(1)
+	}
+
+	go func() {
+		l.Info("starting hot rank consumer", "queue", rabbitmq.QueueHotRank)
+		err := hotRankConsumer.Start(ctx, func(msgCtx context.Context, d amqp.Delivery) error {
+			eventID := d.MessageId
+			if eventID == "" {
+				if val, ok := d.Headers["event_id"].(string); ok {
+					eventID = val
+				}
+			}
+			return hotScoreConsumer.HandleEngagementEvent(msgCtx, eventID, d.RoutingKey, d.Body)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			l.Error("hot rank consumer encountered error", "error", err)
+		}
+	}()
+
 	l.Info("Worker service running and ready for event dispatching and consumption")
 
 	// 9. Signal handling for graceful shutdown

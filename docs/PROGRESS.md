@@ -20,11 +20,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M4 互动、推拉关注流与已赞作品推进中（M4-01~08 已闭环验收，准备推进 M4-09~10）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：8 / 14 项（57.1%） |
-| **进行中任务** | 已落地 000005~000007 迁移脚本、interaction/relation/outbox 领域模型契约、视频点赞/取消与 RowsAffected 原子防丢、我点赞的作品游标流、评论唯一键防重放与双模游标排序、自关注拦截与互粉好友状态判定、Outbox 分布式租约抢占调度器与指数退避 poller、RabbitMQ Publisher Confirms 可靠投递与 consumed_events 消费端事务去重框架、关注流推拉结合（普通写扩散+大V读扩散多路归并排序与单调游标裁剪、冷启动回源与预热） |
+| **当前阶段** | **M4.5 实时热榜与轻量推荐流推进中（M4.5-01~03 已闭环验收，准备推进 M4.5-04~06）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：3 / 8 项（37.5%） |
+| **进行中任务** | 已落地领域模型契约（HotCursor/RecommendCursor 透明游标编解码、打分模型）、Redis 分钟桶 Store 与 as_of 稳定快照聚合（剔除净负分与 zero-score 污染）、RabbitMQ 热度打分异步消费者（HotScoreConsumer）与 Worker 服务装配；推进 M4.5-04~06 多路召回推荐引擎、近期曝光过滤与同作者滑动打散器 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M4-09~10 全局 Feed 架构演进（L1 骨架跨登录态共享与个性化互动态两阶段解耦装配）、历史累计高赞榜单流（`scene=like_rank` 复合游标分页） |
+| **下一步行动** | 推进 M4.5-04~06：轻量多路召回引擎（热门50%+最新30%+探索20%）、近期曝光过滤与同作者滑动窗口打散器、业务服务层 ListHotFeed & ListRecommendFeed 编排 |
 
 ---
 
@@ -37,7 +37,7 @@
 | **M2** | 视频单文件上传与流式发布 | FR-VID-01~05, NFR-EXT-01 | `DONE` | E2E 单测跑通上传、发布、206 Range 分段点播、详情、游标分页与下架；`videos` 与 `video_stats` 事务一致 |
 | **M2.5**| 分片上传与断点续传（二期） | FR-VID-06~07 | `DONE` | 200MB 文件断网重试续传成功；基于 Redis Bitmap 与分布式锁杜绝并发脏写与重复合并；MySQL 权威状态机保证一致性 |
 | **M3** | 全局最新流与播放曝光上报 | FR-FEED-01, 03, 04, FR-VID-08 | `DONE` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确；上报播放行为驱动 `view_count` 自增与曝光打底 |
-| **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `TODO` | 点赞/评论/关注事务一致性与计数防丢；客户端唯一键评论幂等防重放与热评排序；互粉好友判定；Outbox 本地消息表分布式租约调度与 RabbitMQ 可靠投递；消费端事务去重；关注流推拉结合（普通写扩散+大V读扩散多路归并）与冷启动回源；全局流 L1 骨架共享与个性化互动态动态装配；历史累计高赞榜复合游标分页 |
+| **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `DONE` | 点赞/评论/关注事务一致性与计数防丢；客户端唯一键评论幂等防重放与热评排序；互粉好友判定；Outbox 本地消息表分布式租约调度与 RabbitMQ 可靠投递；消费端事务去重；关注流推拉结合（普通写扩散+大V读扩散多路归并）与冷启动回源；全局流 L1 骨架共享与个性化互动态动态装配；历史累计高赞榜复合游标分页 |
 | **M4.5**| 实时热榜与轻量推荐流（进阶流） | FR-FEED-05, FR-FEED-06 | `TODO` | 60分钟滑动窗口互动热度衰减（ZSet分钟桶）；as_of+offset稳定快照分页；热门/最新/探索多路召回、曝光去重与同作者打散 |
 | **M5** | 系统通知与单实例 SSE | FR-NOT-01~05, FR-NOT-07 | `TODO` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；SSE 在线推送与断线补拉验证完整 |
 | **M5.5**| 跨实例 SSE 广播（二期） | FR-NOT-06 | `TODO` | 多实例下 Pub/Sub 广播到达；断连期间通知通过补拉恢复 |
@@ -242,13 +242,113 @@ M4 阶段新增 3 组版本化迁移文件，保持表结构与索引设计最�
 | **E2E-M4-07** | Outbox 租约崩溃接管 | Worker 1 抢占 10 条 Outbox 任务置为 `sending` 后强行杀死；模拟时间过去 30s | 租约回收任务自动将任务恢复为 `pending`，Worker 2 成功接管重新投递，`attempts` 计数自增 |
 | **E2E-M4-08** | L1 骨架共享与个性化注入 | 游客与登录用户先后请求全局流首页 `GET /api/v1/feed/global` | 命中相同的 L1 Redis 骨架键（`feed:page:global:public:...`）；游客返回 `is_liked=false`；点赞该视频的登录用户返回 `is_liked=true` |
 
+## 十、M4.5 实时热榜与轻量推荐流任务明细（进阶流）
+
+### 10.1 参考项目对比与架构优化决策（集思广益 & 取长补短）
+
+对比两个成熟参考项目（`feedsystem_video_go` 与 `GCFeed`），深入分析其在实时热榜、推荐多路召回、曝光去重与规则打散上的设计精髓与潜在痛点，确立 GoRangeFeed 的针对性优化决策：
+
+| 维度 | `feedsystem_video_go` 实现 | `GCFeed` 实现 | GoRangeFeed 优化决策（集思广益 & 落地标准） |
+|---|---|---|---|
+| **热度打分与异步驱动** | 直接在 API 进程或轻量队列消费更新 `hot:video:1m:%s`；缺少事务消息保障，存在事件丢失与重复并发风险；无负反馈打分。 | 规划了明确的分钟桶热度打分模型（点赞+3/取消-3，评论+5/删除-5，播放+0.5，完播+2），但未提供完整消费落地。 | **Outbox 事务驱动 + 全局权重矩阵 + 消费防抖**：<br>1. 点赞、评论、取消点赞等业务事件由 M4 Outbox 本地事务消息表原子落盘；<br>2. Worker `HotScoreConsumer` 消费事件并按权重执行 `ZINCRBY feed:hot:minute:{yyyyMMddHHmm}`（TTL 2小时自然衰减）；<br>3. 支持正向累加（点赞+3、评论+5、完播+2、基础播放+0.5）与逆向扣减（取消点赞-3、删除评论-5）；<br>4. 依托 `consumed_events` 事务去重表，保障热度计算不重复、不遗漏。 |
+| **动态变分下的分页稳定性** | 请求到达时取整分钟 `Truncate(time.Minute)`，合并过去 60 个分钟桶至快照 Key `hot:video:merge:1m:%s`（TTL 2分钟），基于 `offset` 翻页。 | 采用 `window_end + offset` 快照游标分页，明确提出需过滤分值 `≤ 0` 的条目。 | **as_of + offset 稳定快照游标 + 剔除净负分**：<br>1. 客户端首次拉取时服务端对齐当前整分钟时间戳 `as_of = floor(now, 1min)`；<br>2. 服务端原子执行 `ZUNIONSTORE feed:hot:window:{as_of}` 聚合过去 60 个分钟桶，并执行 `ZREMRANGEBYSCORE dest -inf 0` 剔除无效及净负分视频；<br>3. 快照 Key 设定 2 分钟 TTL 覆盖用户翻页生命周期；<br>4. 下发透明 Base64 编码游标 `{"scene":"hot","as_of":1729700000,"offset":10}`，翻页严格沿用同一 `as_of`，彻底根治分数频繁变动导致的分页漏刷与滑重。 |
+| **推荐多路召回策略** | 仅支持单一分类或简单标签过滤（`ListByTag`），无多路召回体系。 | 规划了热门 50% + 最新 30% + 探索 20% 的三路配比，但未沉淀具体打散与管道编排。 | **三路轻量召回引擎（Multi-Source Recall）**：<br>1. **热门高质池（50%）**：从 60 分钟滑动热榜（L2 Hot Window）按分数截取高质候选；<br>2. **最新时效池（30%）**：从全局最新时间线（L2 Global Timeline）拉取最新视频；<br>3. **探索随机池（20%）**：从 72h 活跃池中基于随机游标采样，提升冷启动内容曝光几率；<br>4. 候选不足时各路自动互补降级，保证分页填满。 |
+| **曝光去重与生命周期** | 无曝光去重机制，用户反复刷新易刷到相同视频。 | 规划了 `reco_exposure_log` 与 `exposures` 聚合表，并建议在候选进入排序前过滤。 | **Redis Set 72h 曝光去重集合 + 播放异步沉淀**：<br>1. 端侧播放或曝光上报（`POST /api/v1/videos/:videoId/view`）时，异步将 `video_id` 写入 Redis 集合 `reco:exposed:{uid}`（TTL 72 小时）；<br>2. 推荐流拉取时，Pipeline 批量调用 `SMISMEMBER` 高速探测候选集，秒级剔除已曝光内容；<br>3. 游客匿名请求免去重，登录用户个性化生效。 |
+| **同作者强制打散机制** | 列表无打散，热门作者作品可能连续霸屏多条。 | 提出单页同作者间隔建议，但无具体滑动队列算法。 | **滑动窗口打散算法（Author Diversification）**：<br>1. 在组装最终分页时，维护近期作者滑动窗口队列（`window_size = 3`）；<br>2. 连续 3 条内容中严格杜绝同一作者视频出现；<br>3. 若候选池极端不足，优雅降级容忍返回，兼顾用户体验与接口可用性。 |
+| **卡片缓存与个性化装配** | 未分离卡片与个性化状态，各列表重复组装。 | 规划了 L3 卡片与 L4 计数分离。 | **复用 Dynamic Hydration 体系**：<br>热榜流与推荐流只负责产出有序的 `[]video_id` 候选列表，末端直接复用 M3/M4 已打磨成熟的 L3 视频卡片批量 MGET + L4 计数批量 MGET + `hydrateVideoIDs` 批量注入 `is_liked` 与 `is_followed`，保持全站架构极致内聚。 |
+
 ---
 
-## 十、后续里程碑任务明细规划
+### 10.2 缓存 Key 规范、打分权重公式与推荐流水线
 
-- **M4.5 实时热榜与轻量推荐流（进阶流）**：
-  - **实时滑动热榜（`scene=hot`）**：M4 互动事件（点赞/评论）与 M3 播放事件通过 Outbox 异步打分写入 Redis 60 个 1 分钟桶（`feed:hot:minute:{yyyyMMddHHmm}`）；基于 `as_of = floor(now, 1min)` 快照执行 `ZUNIONSTORE` 聚合前 60 个桶；客户端携带 `as_of + offset` 稳定快照翻页，彻底根治变分下的漏刷与滑重；
-  - **轻量多路召回推荐流（`scene=recommend`）**：三路候选召回（热门高质池 50% + 最新时效池 30% + 随机探索池 20%）；基于 M3 沉淀的 Redis 用户曝光历史（`reco:exposed:{uid}`）执行 72h 近期已看过滤；单页强制同作者间隔打散（间隔 ≥ 3 条）。
+#### 1. Redis 键结构规范
+- **分钟热度桶**：`feed:hot:minute:{yyyyMMddHHmm}`（ZSet，member=video_id, score=delta，TTL = 2 小时，自然衰减）
+- **热榜快照聚合键**：`feed:hot:window:{as_of}`（ZSet，member=video_id, score=total_score，TTL = 2 分钟，翻页专用）
+- **近期曝光去重集合**：`reco:exposed:{uid}`（Set，member=video_id，TTL = 72 小时）
+
+#### 2. 互动热度打分权重矩阵
+| 行为事件 | 事件类型 | 分值变更（Delta） | 业务说明 |
+|---|---|---|---|
+| 视频点赞 | `interaction.liked` | `+3.0` | 核心强正反馈 |
+| 取消点赞 | `interaction.unliked` | `-3.0` | 撤销正向贡献 |
+| 视频发表评论 | `interaction.comment_created` | `+5.0` | 深度互动加权 |
+| 删除评论 | `interaction.comment_deleted` | `-5.0` | 撤销互动贡献 |
+| 视频完播 | `video.completed` / `view_complete` | `+2.0` | 高质量内容完播激励 |
+| 视频基础播放 | `video.viewed` / `view_play` | `+0.5` | 基础曝光消费热度 |
+
+#### 3. 推荐多路召回流水线（Recommendation Pipeline）
+```mermaid
+flowchart TD
+    Req[客户端请求 scene=recommend] --> SoftAuth{SoftJWT 解析}
+    SoftAuth --> Recall[多路并发召回]
+    
+    subgraph MultiRecall [三路候选召回池]
+        Recall --> R1["热门高质池 50% (Hot Window Top 100)"]
+        Recall --> R2["最新时效池 30% (Global Timeline)"]
+        Recall --> R3["随机探索池 20% (72h 活跃池采样)"]
+    end
+    
+    R1 & R2 & R3 --> MergeCandidates[候选集粗排归并]
+    MergeCandidates --> FilterCheck{是否登录用户?}
+    FilterCheck -- 是 --> ExpFilter[Redis Set reco:exposed 批量剔除已看]
+    FilterCheck -- 否 --> Diversify[同作者滑动打散]
+    ExpFilter --> Diversify
+    
+    Diversify --> FillCheck{有效条数是否满足 limit?}
+    FillCheck -- 不足 --> Fallback[从全局时间线无缝补齐差额]
+    FillCheck -- 充足 --> Hydrate[进入 Dynamic Hydration 管道]
+    Fallback --> Hydrate
+    
+    subgraph HydrationPipeline [全站统一装配管道]
+        Hydrate --> L3L4[批量读取 L3 卡片与 L4 实时计数]
+        L3L4 --> DynState[动态注入 viewer is_liked / is_followed]
+    end
+    
+    DynState --> Resp[下发带有透明游标的推荐流响应]
+```
+
+---
+
+### 10.3 M4.5 任务明细拆解
+
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M4.5-01** | 热榜与推荐领域模型、打分规则与流水线契约定义 | — | 在 `internal/domain/feed` 定义 `HotBucket`、`HotScoreEvent`、`RecallCandidate`、`RecommendationRule`、`AuthorWindow` 实体；定义 `HotTimelineStore`、`ExposureRepository`、`RecallEngine`、`Diversifier` 抽象接口契约与领域错误常量；保持零外部依赖与单元测试覆盖 | `DONE` |
+| **M4.5-02** | Redis 滑动分钟桶打分与 as_of 稳定快照聚合 Store 实现 | M0-06, M4.5-01 | 在 `internal/infra/persistence/feed` 实现 `HotTimelineStore`：封装 `ZINCRBY feed:hot:minute:{yyyyMMddHHmm} delta video_id`（TTL 2小时）；实现基于 `as_of = floor(now, 1min)` 的 60 个分钟桶 `ZUNIONSTORE feed:hot:window:{as_of}` 聚合（TTL 2分钟），并自动执行 `ZREMRANGEBYSCORE dest -inf 0` 剔除零分/负分；实现按 `offset` 的 `ZREVRANGE` 快照翻页 | `DONE` |
+| **M4.5-03** | RabbitMQ 热度打分消费者与 Worker 异步管道集成 | M4-07, M4.5-02 | 在 `internal/infra/rabbitmq` 或 `internal/service/feed` 实现 `HotScoreConsumer`；在 `cmd/worker/main.go` 中挂载并订阅 `interaction.*` 与 `video.viewed` 事件；按打分矩阵异步累加分钟桶分数；依托消费端去重保证幂等，无死循环重试 | `DONE` |
+| **M4.5-04** | 轻量多路召回引擎（MultiSourceRecallEngine）实现 | M3-02, M4.5-02 | 在 `internal/service/feed` 实现 `MultiSourceRecallEngine`：支持热门高质池（50% 从 Hot Window 提取）、最新时效池（30% 从 Global Timeline 提取）、探索随机池（20% 随机偏移采样）；各路并发获取并合并去重，候选不足时自动平滑互补 | `TODO` |
+| **M4.5-05** | 近期曝光过滤与同作者滑动窗口打散器实现 | M0-06, M4.5-01 | 在 `internal/infra/persistence/feed` 与 `internal/service/feed` 实现：<br>1. **曝光过滤器**：基于 Redis Set `reco:exposed:{uid}`（TTL 72h），通过 `Pipeline SMISMEMBER` 高速剔除登录用户近期已看视频；<br>2. **同作者打散器**：实现滑动窗口打散算法，保证单页输出中同一作者视频间隔 ≥ 3 条；候选不足时安全降级 | `TODO` |
+| **M4.5-06** | Feed 业务层热榜与推荐编排（ListHotFeed & ListRecommendFeed） | M4.5-02~05, M4-09 | 在 `internal/service/feed` 实现 `ListHotFeed` 与 `ListRecommendFeed`：Hot 流支持 `as_of + offset` 稳定快照翻页；Recommend 流支持多路召回+曝光去重+作者打散；统一步入 L3 视频卡片 MGET + L4 计数 MGET + Dynamic Hydration 个性化装配管道；软鉴权兼容游客与登录态；冷启动与 Redis 异常平滑回源 MySQL | `TODO` |
+| **M4.5-07** | HTTP 控制器、透明游标编解码与全路由装配 | M4.5-06 | 在 `internal/http/feed` 增加 `GET /api/v1/feed/hot` 与 `GET /api/v1/feed/recommend`；实现透明 Base64 JSON 游标编解码（内部封装 `scene`, `as_of`, `offset`, `page`, `seed` 等）；挂载 `SoftJWTAuth` 软鉴权中间件；在 `cmd/api/main.go` 中完成全依赖组装与路由注册；编写 Handler 单元测试 | `TODO` |
+| **M4.5-08** | M4.5 实时热榜与推荐流全生命周期 E2E 集成测试 | M4.5-07 | 在 `test/e2e/hot_recommend_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证互动事件驱动分钟桶热度累加与取消点赞扣分 → as_of 稳定快照分页无重无漏 → 播放行为沉淀曝光记录与二次推荐已看过滤 → 同一作者连续作品强制打散断言 → 游客（未登录）冷启动平滑降级断言 → `make vet && make test` 全量绿灯回归 | `TODO` |
+
+---
+
+### 10.4 核心接口与游标编码规范
+
+| 业务场景 | 方法 | 路径 | 鉴权方式 | 核心入参 / Query | 游标结构与透明编码 | 成功响应核心字段 |
+|---|---|---|---|---|---|---|
+| **实时滑动热榜** | `GET` | `/api/v1/feed/hot` | SoftJWTAuth | `cursor` (string), `limit` (默认 10, 最大 30) | Base64 编码：`{"scene":"hot","as_of":1729700000,"offset":10}` | `{ items: [...], next_cursor: "ey...", has_more: true }` |
+| **轻量推荐流** | `GET` | `/api/v1/feed/recommend` | SoftJWTAuth | `cursor` (string), `limit` (默认 10, 最大 30) | Base64 编码：`{"scene":"recommend","page":1,"seed":1729700000}` | `{ items: [...], next_cursor: "ey...", has_more: true }` |
+| **曝光行为上报** | `POST` | `/api/v1/videos/:videoId/view` | SoftJWTAuth | Path: `videoId`, Body: `{"action":"play"\|"complete"}` | 无 | 触发 `video_stats.view_count + 1`，同时写入 `reco:exposed:{uid}` 并投递热度打分事件 |
+
+---
+
+### 10.5 必测边界用例集合
+
+| 用例编号 | 用例主题 | 构造方式 | 预期断言 |
+|---|---|---|---|
+| **E2E-M4.5-01** | 分钟桶热度打分与逆向扣减 | 发布视频 V1，触发 2 次点赞、1 次评论、1 次取消点赞；Worker 异步消费 | 目标分钟桶内 V1 最终得分严格等于 `3*2 + 5*1 - 3*1 = 8.0`；净负分条目自动被快照剔除 |
+| **E2E-M4.5-02** | as_of 稳定快照翻页无重漏 | 构造 15 条具备不同热度分的视频；翻页拉取（limit=10）；在拉取第二页前突发点赞打乱实时排序 | 第二页拉取沿用首页 `as_of` 快照，严格返回剩余 5 条视频，无重复、无遗漏，不受实时变分干扰 |
+| **E2E-M4.5-03** | 推荐曝光过滤（已看不推） | 登录用户 U1 请求推荐流得到视频 V1；调用曝光接口上报已看；再次请求推荐流 | 新推荐结果中严格不再出现 V1（已被 `reco:exposed` 过滤） |
+| **E2E-M4.5-04** | 同作者作品强制打散 | 作者 A 连续发布 4 条高热度视频；作者 B 发布 2 条视频；请求推荐流 | 返回列表中作者 A 的视频之间严格间隔不少于 3 条，绝不出现单一创作者连续霸屏 |
+| **E2E-M4.5-05** | 游客匿名推荐冷启动 | 匿名游客发起推荐流请求 | 顺利返回最新与探索混合候选，无需曝光去重过滤，Dynamic Hydration 注入 `is_liked=false, is_followed=false` |
+| **E2E-M4.5-06** | 候选不足平滑降级 | 清空热榜与时间线，使多路召回候选不足 `limit` 数量 | 系统自动回源 MySQL 最新冷数据补齐差额，接口稳定返回且 `has_more=false` |
+
+---
+
+## 十一、后续里程碑任务明细规划
+
 - **M5 系统通知与单实例 SSE**：
   - 系统通知明细表（`notifications`）与复合索引设计；
   - Outbox 异步消费生成点赞/评论/关注通知，自身操作不自通知；
@@ -256,10 +356,10 @@ M4 阶段新增 3 组版本化迁移文件，保持表结构与索引设计最�
   - 未读通知计数与游标列表查询、单条/一键已读；
   - SSE Hub 在线推送、短期 Ticket 安全鉴权（防 URL Query 泄露长期 Token）、60s 重叠窗口基于 `Last-Event-ID` 断线补拉。
 - **M5.5 跨实例 SSE 广播（二期）**：
-  - 基于 Redis Pub/Sub（频道 `notify:{userID}`）实现多 API 实例间的跨节点广播分发；
+  - 基于 Redis Pub/Sub（频道 `notify:{userID}`）实现多 API实例间的跨节点广播分发；
   - 弱网波动靠 60s 窗口补拉兜底。
 - **M6 性能压测与播放 QoS 体验监控**：
-  - 核心读写链路（最新流、热榜流、并发点赞、Outbox 吞吐）万级 QPS 极限压测，产出 Benchmark 分析报告；
+  - 核心读写链路（最新流、热榜流、推荐流、并发点赞、Outbox 吞吐）万级 QPS 极限压测，产出 Benchmark 分析报告；
   - **端侧播放体验支持**：下发端侧滑动预加载建议条数与缓冲阈值（`/api/v1/playback/config`）；收集播放卡顿率、首帧耗时与完播率上报，导出 Prometheus 监控大盘。
 - **后续二期进阶演进（M7+）**：
   - **草稿箱与定时发布（Scheduled Publishing）**：支持作者保存草稿并在未来指定时间自动发布；

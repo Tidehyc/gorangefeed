@@ -98,3 +98,15 @@ type FollowingFeedRepository interface {
 	// ListFollowingVideosFromDB queries published video IDs from MySQL for authors, ordered by id DESC.
 	ListFollowingVideosFromDB(ctx context.Context, authorIDs []int64, cursor int64, limit int) ([]int64, error)
 }
+
+// HotTimelineStore manages Redis-based sliding minute buckets and snapshot aggregation for the hot feed.
+type HotTimelineStore interface {
+	// IncrScore increments or decrements the engagement score of a video in the target minute bucket.
+	IncrScore(ctx context.Context, videoID int64, delta float64, occurredAt time.Time) error
+	// MergeWindow aggregates sliding minute buckets into a stable snapshot and purges non-positive scores.
+	MergeWindow(ctx context.Context, asOf time.Time, windowMinutes int) (string, error)
+	// ListBySnapshot retrieves video IDs from the specified asOf snapshot using offset and limit.
+	ListBySnapshot(ctx context.Context, asOf time.Time, offset int, limit int) ([]int64, error)
+	// GetSnapshotTotal returns the total count of valid items in the specified asOf snapshot.
+	GetSnapshotTotal(ctx context.Context, asOf time.Time) (int64, error)
+}

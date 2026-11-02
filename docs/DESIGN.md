@@ -200,35 +200,55 @@ flowchart TD
    - Redis 缓存缺失或冷启动时，平滑降级回源 MySQL `follows` 联表查询兜底。
 
 #### 3.1.6 实时滑动热榜架构（scene=hot）
-为支持发现页的分钟级热榜，采用工业界验证的滑动时间桶（Sliding Buckets）方案：
-1. **写路径（互动事件衰减打分）**：
-   - 粒度为 1 分钟桶：Redis ZSet `feed:hot:minute:{yyyyMMddHHmm}`（TTL = 2 小时，过期自然衰减）。
-   - M4 互动事件（点赞、评论）与 M3 播放事件通过 Outbox/Worker 消费异步累加分值：
-     `Score = 点赞(+3) + 评论(+5) + 完播(+2) + 基础播放(+0.5) - 取消点赞(-3)`。
-2. **读路径与稳定分页快照（as_of + offset）**：
-   - 动态变分容易导致分页“滑重与滑漏”，故采用时间快照机制：
-     客户端初次请求取当前整分钟时间戳 `as_of = floor(now, 1min)`。
-   - 服务端使用 `ZUNIONSTORE feed:hot:window:{as_of} 60 feed:hot:minute:{as_of-59m}...` 聚合过去 60 个分钟桶，临时快照 Key 设置 TTL 2 分钟。
-   - 翻页通过 `ZREVRANGE feed:hot:window:{as_of} offset offset+limit-1` 稳定获取，彻底解决热度变动引发的分页重叠。
+为支持发现页的分钟级热榜，借鉴成熟工程项目（`GCFeed` 与 `feedsystem_video_go`）的成功经验，采用工业界验证的滑动时间桶（Sliding Buckets）与稳定快照分页方案：
+1. **写路径（Outbox 事件驱动异步衰减打分）**：
+   - **时间桶粒度**：按分钟切分 Redis ZSet 桶：`feed:hot:minute:{yyyyMMddHHmm}`（TTL = 2 小时，过期自然衰减剔除历史权重）。
+   - **权重打分矩阵**：由独立 Worker 中的 `HotScoreConsumer` 消费 RabbitMQ 中的互动与播放事件，基于增量执行 `ZINCRBY`：
+     - 点赞 `interaction.liked`：`+3.0`
+     - 取消点赞 `interaction.unliked`：`-3.0`
+     - 发表评论 `interaction.comment_created`：`+5.0`
+     - 删除评论 `interaction.comment_deleted`：`-5.0`
+     - 视频完播 `video.completed`：`+2.0`
+     - 基础播放 `video.viewed`：`+0.5`
+   - **消费幂等与防抖**：依托消费端去重表（`consumed_events`）保障每条业务事实仅计算一次分值。
+2. **读路径与稳定分页快照（as_of + offset 机制）**：
+   - **动态变分痛点**：高频点赞和播放导致视频得分每秒都在变动，传统 `(score, id)` 游标在翻页时会导致视频位次上升或下降，造成严重的“翻页重复”或“翻页漏刷”。
+   - **稳定快照方案**：
+     1. 客户端首次请求时，服务端对齐整分钟时间戳 `as_of = floor(now, 1min)`；
+     2. 聚合过去 60 个分钟桶：
+        ```redis
+        ZUNIONSTORE feed:hot:window:{as_of} 60 feed:hot:minute:{as_of-59m} ... feed:hot:minute:{as_of}
+        ZREMRANGEBYSCORE feed:hot:window:{as_of} -inf 0
+        EXPIRE feed:hot:window:{as_of} 120
+        ```
+     3. 自动剔除分值 `<= 0` 的净负分与无热度视频；临时快照 Key 赋予 2 分钟 TTL，足以覆盖端侧用户下拉翻页周期；
+     4. 游标透明化：下发 Base64 编码的 `next_cursor`（包含 `as_of` 与 `offset`）；翻页拉取通过 `ZREVRANGE feed:hot:window:{as_of} offset offset+limit-1` 稳定获取。
+   - **冷启动与兜底**：若 Redis 实例无数据或聚合异常，平滑降级回源 MySQL 爆款高赞榜（`scene=like_rank`）作为兜底流。
 
 #### 3.1.7 轻量多路召回推荐流（scene=recommend）
-针对综合推荐场景，采用工程可落地、零重型算法依赖的多路召回与规则打散流水线：
+针对综合推荐场景，采用工程可落地、零重型算法训练依赖的轻量多路召回（Multi-Source Recall）与规则打散流水线：
 1. **三路候选召回（Multi-Source Recall）**：
-   - **热门高质池（50%）**：从 60 分钟滑动热榜（L2 Hot Window）按分数截取 Top 100 候选。
-   - **最新时效池（30%）**：从全局最新时间线（L2 Global Timeline）拉取最新视频。
-   - **探索随机池（20%）**：从 72h 活跃池中基于随机游标采样，保持内容新颖度。
+   - **热门高质池（50%）**：从 60 分钟滑动热榜（L2 Hot Window）按分数截取 Top 100 候选；
+   - **最新时效池（30%）**：从全局最新时间线（L2 Global Timeline）拉取最新视频；
+   - **探索随机池（20%）**：从 72h 活跃池中基于随机偏移采样，给予长尾及冷启动内容曝光机会；
+   - **互补降级**：某一路候选数量不足时，自动由其它路（优先最新时效池）平滑补齐，确保分页总数满足 `limit`。
 2. **曝光去重过滤（Exposure Deduplication）**：
-   - 端侧上报的近期播放/曝光 VideoID 维护在 Redis Set `reco:exposed:{uid}`（TTL = 72h）。
-   - 召回候选集在进入排序前批量执行 `SISMEMBER` 判定，已曝光视频直接剔除。
+   - 登录用户的近期播放与曝光 VideoID 维护在 Redis Set `reco:exposed:{uid}`（TTL = 72h）。
+   - 召回候选集在合并后，Pipeline 批量调用 `SMISMEMBER`，秒级剔除已看视频（游客匿名请求不执行过滤）。
 3. **同作者强制打散（Author Diversification）**：
-   - 在组装最终分页时，严格保证同一作者的视频在单页内间隔不少于 3 条，避免单一创作者霸屏。
+   - **滑动窗口算法**：在组装最终输出列表时，维护一个容量为 3 的滑动窗口作者队列：
+     - 若当前候选视频的作者存在于最近 3 条已选视频中，则将该视频暂存至旁路缓冲队列，优先选取后续不同作者的视频；
+     - 若候选池耗尽且仍无法满足严格打散，平滑降级放行缓冲队列视频，避免因严格打散导致的分页断流或条数骤减。
+4. **统一装配（Dynamic Hydration）**：
+   - 过滤与打散完成后产出最终 `[]video_id` 列表；
+   - 复用全局架构中的 L3 视频卡片批量 MGET + L4 实时计数批量 MGET + `hydrateVideoIDs`（根据 `viewerID` 批量注入 `is_liked`、`is_followed`）。
 
 #### 3.1.8 播放与曝光行为上报链路
 1. **上报接口**：`POST /api/v1/videos/:videoId/view`。
-2. **计数原子递增**：
-   - 校验请求合法性后，直接原子执行 `UPDATE video_stats SET view_count = view_count + 1 WHERE video_id = ?`，盘活播放计数。
-3. **曝光事实记录**：
-   - 异步将 `video_id` 写入 Redis 用户近期曝光集合 `reco:exposed:{uid}`，为 `scene=recommend` 提供已看去重事实。
+2. **三位一体原子驱动**：
+   - **计数落盘**：原子执行 `UPDATE video_stats SET view_count = view_count + 1 WHERE video_id = ?`，保障核心事实正确；
+   - **曝光去重事实**：异步将 `video_id` 写入 Redis 用户近期曝光集合 `reco:exposed:{uid}`（TTL 72h），为 `scene=recommend` 提供已看去重事实；
+   - **热度打分事件**：异步投递 `video.viewed` 或 `video.completed` 事件，驱动 `feed:hot:minute:{yyyyMMddHHmm}` 获得 `+0.5` 或 `+2.0` 的热度累加。
 
 ---
 

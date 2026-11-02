@@ -17,4 +17,8 @@ var (
 	ErrInvalidVideoID = errors.New("invalid video id")
 	// ErrInvalidViewerID indicates viewer ID is non-positive when required.
 	ErrInvalidViewerID = errors.New("invalid viewer id")
+	// ErrInvalidHotCursor indicates the hot cursor payload is malformed or invalid.
+	ErrInvalidHotCursor = errors.New("invalid hot cursor")
+	// ErrInvalidRecommendCursor indicates the recommend cursor payload is malformed or invalid.
+	ErrInvalidRecommendCursor = errors.New("invalid recommend cursor")
 )

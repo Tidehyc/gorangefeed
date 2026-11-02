@@ -119,3 +119,83 @@ func TestViewEvent_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestHotCursor_EncodeAndDecode(t *testing.T) {
+	// 1. Zero/Empty cursor
+	emptyCursor := EncodeHotCursor(0, 0)
+	if emptyCursor != "" {
+		t.Fatalf("expected empty cursor string, got %s", emptyCursor)
+	}
+
+	asOf, offset, err := DecodeHotCursor("")
+	if err != nil || asOf != 0 || offset != 0 {
+		t.Fatalf("expected (0, 0, nil), got (%d, %d, %v)", asOf, offset, err)
+	}
+
+	asOf, offset, err = DecodeHotCursor("0")
+	if err != nil || asOf != 0 || offset != 0 {
+		t.Fatalf("expected (0, 0, nil), got (%d, %d, %v)", asOf, offset, err)
+	}
+
+	// 2. Normal roundtrip
+	expectedAsOf := int64(1730000000)
+	expectedOffset := 20
+	encoded := EncodeHotCursor(expectedAsOf, expectedOffset)
+	if encoded == "" {
+		t.Fatalf("expected non-empty encoded cursor")
+	}
+
+	asOf, offset, err = DecodeHotCursor(encoded)
+	if err != nil {
+		t.Fatalf("unexpected decode error: %v", err)
+	}
+	if asOf != expectedAsOf || offset != expectedOffset {
+		t.Fatalf("roundtrip mismatch: got (%d, %d), want (%d, %d)", asOf, offset, expectedAsOf, expectedOffset)
+	}
+
+	// 3. Invalid inputs
+	_, _, err = DecodeHotCursor("invalid-base64%%%")
+	if err != ErrInvalidHotCursor {
+		t.Fatalf("expected ErrInvalidHotCursor for bad base64, got %v", err)
+	}
+
+	_, _, err = DecodeHotCursor("e30=") // "{}"
+	if err != nil {
+		// asOf=0, offset=0 is valid
+	}
+}
+
+func TestRecommendCursor_EncodeAndDecode(t *testing.T) {
+	// 1. Initial page
+	emptyCursor := EncodeRecommendCursor(1, 0)
+	if emptyCursor != "" {
+		t.Fatalf("expected empty string for initial page, got %s", emptyCursor)
+	}
+
+	page, seed, err := DecodeRecommendCursor("")
+	if err != nil || page != 1 || seed != 0 {
+		t.Fatalf("expected (1, 0, nil), got (%d, %d, %v)", page, seed, err)
+	}
+
+	// 2. Normal roundtrip
+	expectedPage := 3
+	expectedSeed := int64(987654321)
+	encoded := EncodeRecommendCursor(expectedPage, expectedSeed)
+	if encoded == "" {
+		t.Fatalf("expected non-empty encoded cursor")
+	}
+
+	page, seed, err = DecodeRecommendCursor(encoded)
+	if err != nil {
+		t.Fatalf("unexpected decode error: %v", err)
+	}
+	if page != expectedPage || seed != expectedSeed {
+		t.Fatalf("roundtrip mismatch: got (%d, %d), want (%d, %d)", page, seed, expectedPage, expectedSeed)
+	}
+
+	// 3. Invalid inputs
+	_, _, err = DecodeRecommendCursor("not-valid-base64!!!")
+	if err != ErrInvalidRecommendCursor {
+		t.Fatalf("expected ErrInvalidRecommendCursor for bad base64, got %v", err)
+	}
+}

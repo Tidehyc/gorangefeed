@@ -1,6 +1,8 @@
 package feed
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -40,6 +42,21 @@ const (
 	L4StatTTL = 15 * time.Second
 	// ExposureTTL is the retention window for viewer exposure deduplication.
 	ExposureTTL = 72 * time.Hour
+
+	// HotMinuteBucketTTL is the expiration time for single 1-minute hot engagement buckets.
+	HotMinuteBucketTTL = 2 * time.Hour
+	// HotWindowSnapshotTTL is the expiration time for aggregated 60-minute hot window snapshots.
+	HotWindowSnapshotTTL = 2 * time.Minute
+	// HotWindowBucketCount is the default number of 1-minute buckets in a sliding hot window (60 minutes).
+	HotWindowBucketCount = 60
+
+	// Hot scoring weights for engagement events
+	ScoreLikeDelta          = 3.0
+	ScoreUnlikeDelta        = -3.0
+	ScoreCommentDelta       = 5.0
+	ScoreCommentDeleteDelta = -5.0
+	ScorePlayDelta          = 0.5
+	ScoreCompleteDelta      = 2.0
 )
 
 // NormalizeScene sanitizes and normalizes the scene string.
@@ -193,4 +210,120 @@ func (e *ViewEvent) Validate() error {
 	default:
 		return ErrInvalidEventType
 	}
+}
+
+// HotCursor stores state for stable snapshot-based pagination of the hot feed.
+type HotCursor struct {
+	Scene  string `json:"scene"`
+	AsOf   int64  `json:"as_of"`
+	Offset int    `json:"offset"`
+}
+
+// EncodeHotCursor encodes asOf unix timestamp and offset into a transparent base64 cursor.
+func EncodeHotCursor(asOf int64, offset int) string {
+	if asOf <= 0 && offset <= 0 {
+		return ""
+	}
+	hc := HotCursor{
+		Scene:  string(SceneHot),
+		AsOf:   asOf,
+		Offset: offset,
+	}
+	b, err := json.Marshal(hc)
+	if err != nil {
+		return ""
+	}
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+// DecodeHotCursor decodes a transparent cursor into asOf unix timestamp and offset.
+func DecodeHotCursor(cursor string) (asOf int64, offset int, err error) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" || cursor == "0" {
+		return 0, 0, nil
+	}
+	b, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		// Fallback for non-url standard base64
+		b, err = base64.StdEncoding.DecodeString(cursor)
+		if err != nil {
+			return 0, 0, ErrInvalidHotCursor
+		}
+	}
+	var hc HotCursor
+	if err := json.Unmarshal(b, &hc); err != nil {
+		return 0, 0, ErrInvalidHotCursor
+	}
+	if hc.AsOf < 0 || hc.Offset < 0 {
+		return 0, 0, ErrInvalidHotCursor
+	}
+	return hc.AsOf, hc.Offset, nil
+}
+
+// RecommendCursor stores state for diversified multi-source recommendation pagination.
+type RecommendCursor struct {
+	Scene string `json:"scene"`
+	Page  int    `json:"page"`
+	Seed  int64  `json:"seed"`
+}
+
+// EncodeRecommendCursor encodes recommendation page index and random seed into a base64 cursor.
+func EncodeRecommendCursor(page int, seed int64) string {
+	if page <= 1 && seed <= 0 {
+		return ""
+	}
+	rc := RecommendCursor{
+		Scene: string(SceneRecommend),
+		Page:  page,
+		Seed:  seed,
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		return ""
+	}
+	return base64.URLEncoding.EncodeToString(b)
+}
+
+// DecodeRecommendCursor decodes a recommendation cursor into page index and seed.
+func DecodeRecommendCursor(cursor string) (page int, seed int64, err error) {
+	cursor = strings.TrimSpace(cursor)
+	if cursor == "" || cursor == "0" {
+		return 1, 0, nil
+	}
+	b, err := base64.URLEncoding.DecodeString(cursor)
+	if err != nil {
+		b, err = base64.StdEncoding.DecodeString(cursor)
+		if err != nil {
+			return 1, 0, ErrInvalidRecommendCursor
+		}
+	}
+	var rc RecommendCursor
+	if err := json.Unmarshal(b, &rc); err != nil {
+		return 1, 0, ErrInvalidRecommendCursor
+	}
+	if rc.Page < 1 {
+		return 1, 0, ErrInvalidRecommendCursor
+	}
+	return rc.Page, rc.Seed, nil
+}
+
+// HotScoreAction defines the source action influencing engagement score.
+type HotScoreAction string
+
+const (
+	ActionLike          HotScoreAction = "like"
+	ActionUnlike        HotScoreAction = "unlike"
+	ActionComment       HotScoreAction = "comment"
+	ActionCommentDelete HotScoreAction = "comment_delete"
+	ActionPlay          HotScoreAction = "play"
+	ActionComplete      HotScoreAction = "complete"
+)
+
+// HotScoreEvent encapsulates an engagement event for hot timeline score calculation.
+type HotScoreEvent struct {
+	EventID    string         `json:"event_id"`
+	VideoID    int64          `json:"video_id"`
+	Action     HotScoreAction `json:"action"`
+	Delta      float64        `json:"delta"`
+	OccurredAt time.Time      `json:"occurred_at"`
 }

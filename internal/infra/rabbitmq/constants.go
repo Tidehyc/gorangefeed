@@ -24,4 +24,6 @@ const (
 	RoutingKeyInteractionCommentDelete = "interaction.comment_deleted"
 	RoutingKeyRelationFollowed         = "relation.followed"
 	RoutingKeyRelationUnfollowed       = "relation.unfollowed"
+	RoutingKeyVideoViewed              = "video.viewed"
+	RoutingKeyVideoCompleted           = "video.completed"
 )
