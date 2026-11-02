@@ -15,6 +15,7 @@ import (
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
+	httpnotification "github.com/Tidehyc/gorangefeed/internal/http/notification"
 	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
@@ -24,6 +25,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
 	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
@@ -35,6 +37,7 @@ import (
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
+	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
 	servicerelation "github.com/Tidehyc/gorangefeed/internal/service/relation"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
@@ -141,6 +144,30 @@ func main() {
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
+	// 8.5 Assemble Notification Domain, Broadcaster and SSE Hub
+	notifRepo := persistencenotification.NewRepository(db)
+	notifBroadcaster, err := redis.NewRedisBroadcaster(rdb, redis.ChannelNotifications)
+	if err != nil {
+		l.Error("failed to initialize notification broadcaster", "error", err)
+		os.Exit(1)
+	}
+	notifSvc, err := servicenotification.NewService(notifRepo, notifBroadcaster)
+	if err != nil {
+		l.Error("failed to initialize notification service", "error", err)
+		os.Exit(1)
+	}
+	sseHub, err := servicenotification.NewSSEHub(notifRepo, notifBroadcaster, rdb)
+	if err != nil {
+		l.Error("failed to initialize sse hub", "error", err)
+		os.Exit(1)
+	}
+	hubCtx, cancelHub := context.WithCancel(context.Background())
+	defer cancelHub()
+	if err := sseHub.Start(hubCtx); err != nil {
+		l.Error("failed to start sse hub", "error", err)
+		os.Exit(1)
+	}
+	notifHandler := httpnotification.NewHandler(notifSvc, sseHub)
 
 	// Hook into video publishing to append published videos to timeline
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
@@ -170,6 +197,7 @@ func main() {
 	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
 	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
 	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
+	httpnotification.RegisterRoutes(engine, notifHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
@@ -192,6 +220,15 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-quit
 	l.Info("received termination signal, initiating graceful shutdown", "signal", sig.String())
+
+	// 6.5 Gracefully drain active SSE streams and notify connected clients to drift
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	sseHub.Drain(drainCtx)
+	drainCancel()
+	cancelHub()
+	if err := notifBroadcaster.Close(); err != nil {
+		l.Warn("error closing notification broadcaster", "error", err)
+	}
 
 	// 7. Graceful shutdown: wait for in-flight requests
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M5 系统通知与分布式跨实例 SSE 推进中（M5-01~06 已闭环验收，准备推进 M5-07~09）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：6 / 10 项（60%） |
-| **进行中任务** | 已落地 000009_create_notifications_table 数据表迁移与索引、notification 领域聚合根与仓储、评论 @提及 用户解析器与 NotificationService（M5-04）、分布式 Broadcaster 抽象与 Redis Pub/Sub 引擎（M5-05）、RabbitMQ 通知消费者与跨进程 Redis Pub/Sub 事件广播（M5-06）并在 Worker 中启动；准备推进 M5-07~09（分布式 SSE Hub、短期 Ticket 安全鉴权、60s 补拉、平滑 Drain 与 HTTP 路由装配） |
+| **当前阶段** | **M5 系统通知与分布式跨实例 SSE 推进中（M5-01~09 已闭环验收，准备推进 M5-10 全生命周期 E2E 集成测试）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：9 / 10 项（90%） |
+| **进行中任务** | 已落地 000009 迁移、领域模型聚合根与仓储持久化、@提及 解析与通知服务（M5-04）、分布式 Broadcaster 与 Redis Pub/Sub（M5-05）、RabbitMQ 消费者（M5-06）、分布式 SSE Hub 连接池与 60s 补拉引擎（M5-07）、停机优雅 Drain 与 Prometheus 指标（M5-08）、HTTP 控制器与全路由组装（M5-09）；准备推进 M5-10（全生命周期 E2E 验收测试） |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M5-07~09：实现分布式 SSE Hub、Redis 短期 Ticket 交换、60s 补拉引擎、优雅停机 Drain 引导与 API 路由注册 |
+| **下一步行动** | 推进 M5-10：在 `test/e2e/notification_lifecycle_test.go` 中实现完整黑盒集成测试，覆盖从异步落库、提及派发、复合游标、Ticket 鉴权到跨节点双实例广播与故障平滑漂移的闭环验收 |
 
 
 
@@ -183,9 +183,9 @@
 | **M5-04** | 评论 `@提及` 用户解析器与通知服务 | M5-02 | 在 `internal/service/notification` 实现提及解析器：正则提取评论中的 `@username`（去重并限制上限 10 人）；联动 `accountRepo` 批量查询目标用户 ID；过滤自提及与视频作者自身；批量生成 `mention` 类型系统通知并持久化落库；覆盖单测 | `DONE` |
 | **M5-05** | 分布式事件广播器抽象与 Redis Pub/Sub 引擎实现 | M0-06 | 抽象通用 `Broadcaster` 接口（`Publish`, `Subscribe`, `Close`）；在 `internal/infra/redis` 实现 `RedisBroadcaster`，订阅集中式广播主题 `channel.gorangefeed.notifications`；提供 `MemoryBroadcaster` 供本地单机与轻量单测使用；支持断线自动重试与重新订阅 | `DONE` |
 | **M5-06** | RabbitMQ 通知消费者与跨进程 Redis Pub/Sub 事件广播 | M4-07, M5-03~05 | 在 `internal/service/notification` 实现 `NotificationConsumer`：订阅 `interaction.liked`、`interaction.commented`、`relation.followed` 等事件；过滤自身操作防自扰；关联视频/评论作者并触发落库与 `@mention` 派发；依托消费端去重表与唯一键保障幂等；落库成功后调用 `Broadcaster.Publish` 向 Redis 广播信令；在 `cmd/worker/main.go` 中挂载并启动 | `DONE` |
-| **M5-07** | 分布式 SSE Hub 连接池、短期 Ticket 安全鉴权与 60s 重叠窗口断线补拉引擎 | M0-06, M5-02, M5-03, M5-05 | 在 `internal/service/notification` 实现 `SSEHub`：维护内存活跃客户端连接池（通道缓冲 64，溢出主动剔除断开）；常驻协程监听 Redis 广播频道并在本地内存 `clients[uid]` 执行 O(1) 匹配投递；实现 15s 定时心跳注释（`: keepalive\n\n`）；实现基于 Redis 的短期一次性 Ticket 交换与安全销毁（`sse:ticket:{uuid} -> uid`, EX 60s，Lua 原子消费）；实现 `Last-Event-ID` 解析与 60s 重叠窗口回退查询，在连接建立时优先补推遗漏历史通知再接入实时通道 | `TODO` |
-| **M5-08** | 节点停机平滑 Drain、在线状态心跳与 Prometheus 大盘指标 | M5-07 | 维护节点标识 `node_id`（主机名+随机 UUID 码）；通过 Redis Hash 定期上报活跃长连接数（TTL 30s）；导出 Prometheus 指标：`sse_connected_clients`、`sse_broadcast_received_total`、`sse_broadcast_sent_total`、`sse_dispatch_latency_seconds`；实现优雅退出协同：API 实例接收 SIGTERM 信号时，先向所有本地活跃 SSE 客户端推送协议级注释行通知 `: server_restarting\n\n` 并平滑关闭长连接，引导客户端自动漂移重连存活节点 | `TODO` |
-| **M5-09** | 通知 HTTP 控制器、SSE 流路由与全路由装配 | M5-06~08 | 在 `internal/http/notification` 暴露 `GET /api/v1/notifications`、`GET /api/v1/notifications/unread-count`、`PATCH /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`、`POST /api/v1/notifications/sse/ticket`、`GET /api/v1/notifications/stream`；统一响应信封与错误码；绑定 JWTAuth 与 Ticket 鉴权；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `TODO` |
+| **M5-07** | 分布式 SSE Hub 连接池、短期 Ticket 安全鉴权与 60s 重叠窗口断线补拉引擎 | M0-06, M5-02, M5-03, M5-05 | 在 `internal/service/notification` 实现 `SSEHub`：维护内存活跃客户端连接池（通道缓冲 64，溢出主动剔除断开）；常驻协程监听 Redis 广播频道并在本地内存 `clients[uid]` 执行 O(1) 匹配投递；实现 15s 定时心跳注释（`: keepalive\n\n`）；实现基于 Redis 的短期一次性 Ticket 交换与安全销毁（`sse:ticket:{uuid} -> uid`, EX 60s，Lua 原子消费）；实现 `Last-Event-ID` 解析与 60s 重叠窗口回退查询，在连接建立时优先补推遗漏历史通知再接入实时通道 | `DONE` |
+| **M5-08** | 节点停机平滑 Drain、在线状态心跳与 Prometheus 大盘指标 | M5-07 | 维护节点标识 `node_id`（主机名+随机 UUID 码）；通过 Redis Hash 定期上报活跃长连接数（TTL 30s）；导出 Prometheus 指标：`sse_connected_clients`、`sse_broadcast_received_total`、`sse_broadcast_sent_total`、`sse_dispatch_latency_seconds`；实现优雅退出协同：API 实例接收 SIGTERM 信号时，先向所有本地活跃 SSE 客户端推送协议级注释行通知 `: server_restarting\n\n` 并平滑关闭长连接，引导客户端自动漂移重连存活节点 | `DONE` |
+| **M5-09** | 通知 HTTP 控制器、SSE 流路由与全路由装配 | M5-06~08 | 在 `internal/http/notification` 暴露 `GET /api/v1/notifications`、`GET /api/v1/notifications/unread-count`、`PATCH /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`、`POST /api/v1/notifications/sse/ticket`、`GET /api/v1/notifications/stream`；统一响应信封与错误码；绑定 JWTAuth 与 Ticket 鉴权；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `DONE` |
 | **M5-10** | M5 端到端通知闭环、断线补拉与多实例集群广播全生命周期 E2E 集成测试 | M5-09 | 在 `test/e2e/notification_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证点赞/评论/关注驱动通知异步落库与自操作过滤 → 评论 `@提及` 用户生成 mention 通知 → 未读计数与单条/一键已读原子流转 → 通知列表复合游标无重无漏翻页 → SSE Ticket 安全置换与防二次使用 → 模拟用户在线 SSE 实时接收通知推送（端到端 < 100ms） → 模拟断线 10s 期间产生新通知并携带 Last-Event-ID 完整补拉无遗漏 → 启动双节点模拟跨节点 Redis 广播到达与节点停机优雅漂移接管 → `make vet && make test` 全量绿灯回归 | `TODO` |
 
 ---
