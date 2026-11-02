@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M5 系统通知与分布式跨实例 SSE 推进中（M5-01~09 已闭环验收，准备推进 M5-10 全生命周期 E2E 集成测试）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：9 / 10 项（90%） |
-| **进行中任务** | 已落地 000009 迁移、领域模型聚合根与仓储持久化、@提及 解析与通知服务（M5-04）、分布式 Broadcaster 与 Redis Pub/Sub（M5-05）、RabbitMQ 消费者（M5-06）、分布式 SSE Hub 连接池与 60s 补拉引擎（M5-07）、停机优雅 Drain 与 Prometheus 指标（M5-08）、HTTP 控制器与全路由组装（M5-09）；准备推进 M5-10（全生命周期 E2E 验收测试） |
+| **当前阶段** | **M5 系统通知与分布式跨实例 SSE 已全部闭环验收（10/10 项，100%），准备规划推进 M6 性能压测与播放 QoS 体验监控** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：10 / 10 项（100%） |
+| **进行中任务** | 已完成 M5 全部 10 项子任务（M5-01~10），包含数据迁移、模型持久化、@提及解析、分布式广播器、RabbitMQ 消费者、分布式 SSE Hub、优雅停机 Drain、HTTP 路由装配与 10 个端到端生命周期 E2E 黑盒集成测试 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M5-10：在 `test/e2e/notification_lifecycle_test.go` 中实现完整黑盒集成测试，覆盖从异步落库、提及派发、复合游标、Ticket 鉴权到跨节点双实例广播与故障平滑漂移的闭环验收 |
+| **下一步行动** | 规划 M6 阶段：核心链路万级 QPS 性能压测基准、端侧预加载策略配置与播放 QoS 体验指标监控 |
 
 
 
@@ -43,7 +43,7 @@
 | **M3** | 全局最新流与播放曝光上报 | FR-FEED-01, 03, 04, FR-VID-08 | `DONE` | 游标翻页无重无漏；Redis 异常时自动平滑降级 DB；下架内容补页正确；上报播放行为驱动 `view_count` 自增与曝光打底 |
 | **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `DONE` | 点赞/评论/关注事务一致性与计数防丢；客户端唯一键评论幂等防重放与热评排序；互粉好友判定；Outbox 本地消息表分布式租约调度与 RabbitMQ 可靠投递；消费端事务去重；关注流推拉结合（普通写扩散+大V读扩散多路归并）与冷启动回源；全局流 L1 骨架共享与个性化互动态动态装配；历史累计高赞榜复合游标分页 |
 | **M4.5**| 实时热榜与轻量推荐流（进阶流） | FR-FEED-05, FR-FEED-06 | `DONE` | 60分钟滑动窗口互动热度衰减（ZSet分钟桶）；as_of+offset稳定快照分页；热门/最新/探索多路召回、曝光去重与同作者打散；全生命周期 E2E 测试绿灯 |
-| **M5** | 系统通知与分布式跨实例 SSE | FR-NOT-01~07 | `TODO` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；基于 Redis Pub/Sub 的跨实例广播秒级到达；SSE 在线推送与 60s 重叠窗口基于 Last-Event-ID 断线补拉验证完整 |
+| **M5** | 系统通知与分布式跨实例 SSE | FR-NOT-01~07 | `DONE` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；基于 Redis Pub/Sub 的跨实例广播秒级到达；SSE 在线推送与 60s 重叠窗口基于 Last-Event-ID 断线补拉验证完整 |
 | **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `TODO` | 核心链路达到性能设计指标或产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
 
 
@@ -186,7 +186,7 @@
 | **M5-07** | 分布式 SSE Hub 连接池、短期 Ticket 安全鉴权与 60s 重叠窗口断线补拉引擎 | M0-06, M5-02, M5-03, M5-05 | 在 `internal/service/notification` 实现 `SSEHub`：维护内存活跃客户端连接池（通道缓冲 64，溢出主动剔除断开）；常驻协程监听 Redis 广播频道并在本地内存 `clients[uid]` 执行 O(1) 匹配投递；实现 15s 定时心跳注释（`: keepalive\n\n`）；实现基于 Redis 的短期一次性 Ticket 交换与安全销毁（`sse:ticket:{uuid} -> uid`, EX 60s，Lua 原子消费）；实现 `Last-Event-ID` 解析与 60s 重叠窗口回退查询，在连接建立时优先补推遗漏历史通知再接入实时通道 | `DONE` |
 | **M5-08** | 节点停机平滑 Drain、在线状态心跳与 Prometheus 大盘指标 | M5-07 | 维护节点标识 `node_id`（主机名+随机 UUID 码）；通过 Redis Hash 定期上报活跃长连接数（TTL 30s）；导出 Prometheus 指标：`sse_connected_clients`、`sse_broadcast_received_total`、`sse_broadcast_sent_total`、`sse_dispatch_latency_seconds`；实现优雅退出协同：API 实例接收 SIGTERM 信号时，先向所有本地活跃 SSE 客户端推送协议级注释行通知 `: server_restarting\n\n` 并平滑关闭长连接，引导客户端自动漂移重连存活节点 | `DONE` |
 | **M5-09** | 通知 HTTP 控制器、SSE 流路由与全路由装配 | M5-06~08 | 在 `internal/http/notification` 暴露 `GET /api/v1/notifications`、`GET /api/v1/notifications/unread-count`、`PATCH /api/v1/notifications/:id/read`、`POST /api/v1/notifications/read-all`、`POST /api/v1/notifications/sse/ticket`、`GET /api/v1/notifications/stream`；统一响应信封与错误码；绑定 JWTAuth 与 Ticket 鉴权；在 `cmd/api/main.go` 完成依赖注入与路由挂载；编写 Handler 单测 | `DONE` |
-| **M5-10** | M5 端到端通知闭环、断线补拉与多实例集群广播全生命周期 E2E 集成测试 | M5-09 | 在 `test/e2e/notification_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证点赞/评论/关注驱动通知异步落库与自操作过滤 → 评论 `@提及` 用户生成 mention 通知 → 未读计数与单条/一键已读原子流转 → 通知列表复合游标无重无漏翻页 → SSE Ticket 安全置换与防二次使用 → 模拟用户在线 SSE 实时接收通知推送（端到端 < 100ms） → 模拟断线 10s 期间产生新通知并携带 Last-Event-ID 完整补拉无遗漏 → 启动双节点模拟跨节点 Redis 广播到达与节点停机优雅漂移接管 → `make vet && make test` 全量绿灯回归 | `TODO` |
+| **M5-10** | M5 端到端通知闭环、断线补拉与多实例集群广播全生命周期 E2E 集成测试 | M5-09 | 在 `test/e2e/notification_lifecycle_test.go` 中实现完整黑盒 E2E 测试集：验证点赞/评论/关注驱动通知异步落库与自操作过滤 → 评论 `@提及` 用户生成 mention 通知 → 未读计数与单条/一键已读原子流转 → 通知列表复合游标无重无漏翻页 → SSE Ticket 安全置换与防二次使用 → 模拟用户在线 SSE 实时接收通知推送（端到端 < 100ms） → 模拟断线 10s 期间产生新通知并携带 Last-Event-ID 完整补拉无遗漏 → 启动双节点模拟跨节点 Redis 广播到达与节点停机优雅漂移接管 → `make vet && make test` 全量绿灯回归 | `DONE` |
 
 ---
 

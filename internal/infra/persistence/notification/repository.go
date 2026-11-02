@@ -181,12 +181,10 @@ func (r *gormRepository) ListAfter(
 	query := r.db.WithContext(ctx).Model(&NotificationModel{}).
 		Where("recipient_id = ? AND is_read = ?", recipientID, false)
 
-	if !after.IsZero() {
-		if minID > 0 {
-			query = query.Where("(created_at > ? OR (created_at = ? AND id > ?))", after, after, minID)
-		} else {
-			query = query.Where("created_at > ?", after)
-		}
+	if !after.IsZero() && minID > 0 {
+		query = query.Where("created_at >= ? AND id > ?", after, minID)
+	} else if !after.IsZero() {
+		query = query.Where("created_at >= ?", after)
 	} else if minID > 0 {
 		query = query.Where("id > ?", minID)
 	}

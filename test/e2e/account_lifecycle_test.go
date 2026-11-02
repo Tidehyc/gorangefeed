@@ -16,10 +16,13 @@ import (
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
+	httpnotification "github.com/Tidehyc/gorangefeed/internal/http/notification"
 	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
+	domainnotification "github.com/Tidehyc/gorangefeed/internal/domain/notification"
 	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 
@@ -29,6 +32,7 @@ import (
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
+	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
 	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	persistenceupload "github.com/Tidehyc/gorangefeed/internal/infra/persistence/upload"
@@ -41,6 +45,7 @@ import (
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
+	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
 	servicerelation "github.com/Tidehyc/gorangefeed/internal/service/relation"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
@@ -201,6 +206,12 @@ type e2eExtendedCtx struct {
 	FeedSvc        servicefeed.Service
 	HotStore       domainfeed.HotTimelineStore
 	OutboxRepo     domainoutbox.Repository
+	NotifRepo      domainnotification.Repository
+	NotifSvc       *servicenotification.Service
+	SSEHub         *servicenotification.SSEHub
+	Broadcaster    *redis.RedisBroadcaster
+	Consumer       *servicenotification.Consumer
+	TokenStore     domainaccount.TokenStore
 }
 
 
@@ -323,7 +334,22 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
 	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
 
+	notifRepo := persistencenotification.NewRepository(db)
+	notifBroadcaster, _ := redis.NewRedisBroadcaster(rdb, redis.ChannelNotifications)
+	notifSvc, _ := servicenotification.NewService(notifRepo, notifBroadcaster)
+	sseHub, _ := servicenotification.NewSSEHub(notifRepo, notifBroadcaster, rdb)
+	hubCtx, cancelHub := context.WithCancel(context.Background())
+	_ = sseHub.Start(hubCtx)
+	notifHandler := httpnotification.NewHandler(notifSvc, sseHub)
+	httpnotification.RegisterRoutes(engine, notifHandler, jwtMgr, tokenStore, rdb)
+
+	deduplicator := rabbitmq.NewDeduplicator(db)
+	notifConsumer, _ := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, repo)
+
 	cleanup := func() {
+		cancelHub()
+		_ = sseHub.Close()
+		_ = notifBroadcaster.Close()
 		_ = os.RemoveAll(tempDir)
 		_ = rdb.Close()
 		if mqConn != nil {
@@ -346,8 +372,13 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		FeedSvc:        feedSvc,
 		HotStore:       hotStore,
 		OutboxRepo:     persistenceoutbox.NewRepository(db),
+		NotifRepo:      notifRepo,
+		NotifSvc:       notifSvc,
+		SSEHub:         sseHub,
+		Broadcaster:    notifBroadcaster,
+		Consumer:       notifConsumer,
+		TokenStore:     tokenStore,
 	}, cleanup
-
 }
 
 func parseJSONResponse(t *testing.T, w *httptest.ResponseRecorder, target interface{}) {
