@@ -906,7 +906,11 @@ func TestM5_NotificationLifecycle_EndToEnd(t *testing.T) {
 		readerC := bufio.NewReader(respStreamC.Body)
 		_, _ = readNextSSEMessage(readerC, 2*time.Second) // consume retry
 
-		// Both nodes have 1 connected client
+		// Both nodes have 1 connected client (wait briefly for previous disconnected SSE goroutines to finish unregistering)
+		deadline := time.Now().Add(1 * time.Second)
+		for time.Now().Before(deadline) && (ctxExt.SSEHub.ConnectedCount() != 1 || sseHub2.ConnectedCount() != 1) {
+			time.Sleep(25 * time.Millisecond)
+		}
 		if ctxExt.SSEHub.ConnectedCount() != 1 {
 			t.Errorf("expected Node 1 connected count=1, got %d", ctxExt.SSEHub.ConnectedCount())
 		}

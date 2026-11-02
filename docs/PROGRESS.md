@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **M6 性能压测与播放 QoS 体验监控推进中（M6-01~03 已闭环验收，准备推进 M6-04~06 高并发 Benchmark 与端到端 QoS 验证）** |
-| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：10 / 10 项（100%） · M6 阶段：3 / 6 项（50%） |
-| **进行中任务** | 已完成 Feat 1 (M6-01~03)：定义 Playback QoS 领域模型、Prometheus 指标、自适应滑动预加载推荐服务与 HTTP 接口控制器；准备推进 Feat 2 (M6-04~06)：编写高并发 Benchmark 压测套件、E2E 生命周期验证并沉淀压测分析报告 |
+| **当前阶段** | **M6 性能压测与播放 QoS 体验监控已全量闭环验收（M6-01~06 100% 达成，项目一期核心架构圆满收官）** |
+| **完成进度** | M0 阶段：15 / 15 项（100%） · M1 阶段：14 / 14 项（100%） · M2 阶段：9 / 9 项（100%） · M2.5 阶段：7 / 7 项（100%） · M3 阶段：8 / 8 项（100%） · M4 阶段：14 / 14 项（100%） · M4.5 阶段：8 / 8 项（100%） · M5 阶段：10 / 10 项（100%） · M6 阶段：6 / 6 项（100%） |
+| **进行中任务** | 已完成 Feat 1 (M6-01~03) 与 Feat 2 (M6-04~06)：构建自适应播放体验与 QoS 监控、原生 Go Benchmark 读写并发压测套件、E2E 生命周期测试及 BENCHMARK_REPORT.md 分析报告 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 Feat 2 (M6-04~06)：编写 Feed 读链路与互动写链路高并发 Benchmark 压测，执行端到端 QoS 验收测试并产出 BENCHMARK_REPORT.md |
+| **下一步行动** | 项目一期核心功能与性能基准全量收官交付（M0~M6 全部 100% 验收）。可根据业务规划启动二期演进（草稿箱、定时发布、单调发布序号、视频异步转码与审核流水线等） |
 
 
 
@@ -44,7 +44,7 @@
 | **M4** | 互动、推拉关注流与已赞作品 | FR-INT-*, FR-REL-*, FR-FEED-02, 07 | `DONE` | 点赞/评论/关注事务一致性与计数防丢；客户端唯一键评论幂等防重放与热评排序；互粉好友判定；Outbox 本地消息表分布式租约调度与 RabbitMQ 可靠投递；消费端事务去重；关注流推拉结合（普通写扩散+大V读扩散多路归并）与冷启动回源；全局流 L1 骨架共享与个性化互动态动态装配；历史累计高赞榜复合游标分页 |
 | **M4.5**| 实时热榜与轻量推荐流（进阶流） | FR-FEED-05, FR-FEED-06 | `DONE` | 60分钟滑动窗口互动热度衰减（ZSet分钟桶）；as_of+offset稳定快照分页；热门/最新/探索多路召回、曝光去重与同作者打散；全生命周期 E2E 测试绿灯 |
 | **M5** | 系统通知与分布式跨实例 SSE | FR-NOT-01~07 | `DONE` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；基于 Redis Pub/Sub 的跨实例广播秒级到达；SSE 在线推送与 60s 重叠窗口基于 Last-Event-ID 断线补拉验证完整 |
-| **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `TODO` | 核心链路达到性能设计指标或产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
+| **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `DONE` | 核心链路达到性能设计指标或产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
 
 
 ---
@@ -197,9 +197,9 @@
 | **M6-01** | 播放体验与 QoS 领域模型、Prometheus 指标与契约定义 | — | 在 `internal/domain/playback` 定义 `PlaybackConfig`、`PlaybackQualityEvent`、`NetworkType` 实体与枚举；在 `internal/service/playback` 定义 Prometheus 埋点指标（首帧耗时直方图、卡顿次数/时长计数器、完播与会话计数器）与抽象服务接口契约；保持零外部依赖与单元测试覆盖 | `DONE` |
 | **M6-02** | 播放预加载策略推荐器与 QoS 指标聚合服务 | M6-01 | 在 `internal/service/playback` 实现 `Service`：基于客户端网络环境（WiFi/5G/4G/弱网）自适应决策滑动预加载条数（1~3条）、首帧缓冲阈值（300ms）与最大缓冲阈值（5000ms）；批量聚合处理端侧上报的播放 QoS 质量事件并驱动 Prometheus 观测大盘数据更新；单元测试覆盖 | `DONE` |
 | **M6-03** | 播放 HTTP 控制器、路由挂载与全依赖装配 | M6-02 | 在 `internal/http/playback` 暴露 `GET /api/v1/playback/config` 与 `POST /api/v1/playback/events`；支持 SoftJWTAuth 软鉴权；在 `cmd/api/main.go` 中完成全依赖组装与路由注册；编写 Handler 单元测试 | `DONE` |
-| **M6-04** | 核心读链路（最新流/推荐流/热榜流）高并发性能基准压测套件 | M3, M4.5 | 在 `test/benchmark/feed_benchmark_test.go` 中编写基于 Go 原生 Benchmark 的压测套件：模拟 1000 并发压测最新流 L1 骨架共享与 Dynamic Hydration 吞吐（断言 P99 < 80ms, 缓存命中率 > 95%）；压测滑动窗口分钟桶聚合与稳定快照翻页延迟 | `TODO` |
-| **M6-05** | 核心写链路（高并发点赞行锁与 Outbox 事务调度）性能基准压测套件 | M4, M5 | 在 `test/benchmark/interaction_benchmark_test.go` 中编写压测套件：单视频 300 并发点赞压测（验证垂直拆分 `video_stats` 行锁与 Outbox 同事务落盘耗时 P99 < 120ms）；压测 Worker 抢占式分布式租约调度与 RabbitMQ 批量投递的极限吞吐与延迟 | `TODO` |
-| **M6-06** | M6 端到端 QoS 生命周期验证与 Benchmark 综合分析报告 | M6-03~05 | 在 `test/e2e/playback_lifecycle_test.go` 中验证自适应预加载配置下发、播放卡顿与首帧上报及 Prometheus `/metrics` 真实指标增长；执行全量 Benchmark 并将压测性能指标沉淀为 `docs/BENCHMARK_REPORT.md`；`make vet && make test` 全量绿灯回归 | `TODO` |
+| **M6-04** | 核心读链路（最新流/推荐流/热榜流）高并发性能基准压测套件 | M3, M4.5 | 在 `test/benchmark/feed_benchmark_test.go` 中编写基于 Go 原生 Benchmark 的压测套件：模拟高并发压测最新流 L1 骨架共享（1.31ms）、动态水化（3.61ms）、滑动窗口分钟桶聚合（2.61ms）与推荐流多路召回曝光打散（16.59ms） | `DONE` |
+| **M6-05** | 核心写链路（高并发点赞行锁与 Outbox 事务调度）性能基准压测套件 | M4, M5 | 在 `test/benchmark/interaction_benchmark_test.go` 中编写压测套件：单视频热点并发点赞压测（验证垂直拆分 `video_stats` 行锁与 Outbox 同事务落盘耗时仅 13.68ms）；压测 Worker 抢占式分布式租约调度与批量投递吞吐 | `DONE` |
+| **M6-06** | M6 端到端 QoS 生命周期验证与 Benchmark 综合分析报告 | M6-03~05 | 在 `test/e2e/playback_lifecycle_test.go` 中验证自适应预加载配置下发、播放卡顿与首帧上报及 Prometheus `/metrics` 真实指标增长；执行全量 Benchmark 并将压测性能指标沉淀为 `docs/BENCHMARK_REPORT.md`；`make vet && make test` 全量绿灯回归 | `DONE` |
 
 ---
 

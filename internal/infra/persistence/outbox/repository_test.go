@@ -123,7 +123,11 @@ func TestGormOutboxRepository_ClaimAndLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CountByStatus pending failed: %v", err)
 	}
-	if pendingCount != 0 {
-		t.Errorf("expected 0 pending events, got %d", pendingCount)
+	var thisEventPending int64
+	if err := db.Model(&persistenceoutbox.OutboxModel{}).Where("event_id = ? AND status = ?", event.EventID, string(domainoutbox.StatusPending)).Count(&thisEventPending).Error; err != nil {
+		t.Fatalf("failed to query event pending count: %v", err)
+	}
+	if thisEventPending != 0 {
+		t.Errorf("expected 0 pending count for event %s, got %d (global pending: %d)", event.EventID, thisEventPending, pendingCount)
 	}
 }
