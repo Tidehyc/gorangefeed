@@ -17,12 +17,15 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	"github.com/Tidehyc/gorangefeed/internal/infra/outbox"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
 	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
+	persistencevideo "github.com/Tidehyc/gorangefeed/internal/infra/persistence/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
+	infrascheduler "github.com/Tidehyc/gorangefeed/internal/infra/scheduler"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -277,6 +280,15 @@ func main() {
 		}
 	}()
 
+	// 8.3 Initialize Creator Center Delayed Scheduler
+	draftRepo := persistencecreator.NewDraftRepository(db)
+	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
+	videoRepo := persistencevideo.NewRepository(db)
+	seqGen := redis.NewSequenceGenerator(rdb)
+	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
+	delayedScheduler.Start(ctx)
+	l.Info("creator delayed scheduler started successfully")
+
 	l.Info("Worker service running and ready for event dispatching and consumption")
 
 	// 9. Signal handling for graceful shutdown
@@ -287,6 +299,7 @@ func main() {
 
 	// 10. Stop worker processing and outbox scheduler
 	stopWorker()
+	delayedScheduler.Stop()
 	outboxScheduler.Stop()
 
 	metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 3*time.Second)

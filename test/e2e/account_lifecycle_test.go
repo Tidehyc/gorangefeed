@@ -14,6 +14,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpcreator "github.com/Tidehyc/gorangefeed/internal/http/creator"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
 	httpnotification "github.com/Tidehyc/gorangefeed/internal/http/notification"
@@ -22,15 +23,18 @@ import (
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
+	domaincreator "github.com/Tidehyc/gorangefeed/internal/domain/creator"
 	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
 	domainnotification "github.com/Tidehyc/gorangefeed/internal/domain/notification"
 	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
+	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
 	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
@@ -42,8 +46,10 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/response"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
+	infrascheduler "github.com/Tidehyc/gorangefeed/internal/infra/scheduler"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	servicecreator "github.com/Tidehyc/gorangefeed/internal/service/creator"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
@@ -167,8 +173,21 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
 
+	draftRepo := persistencecreator.NewDraftRepository(db)
+	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
+	seqGen := redis.NewSequenceGenerator(rdb)
+	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
+	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
+	creatorHandler := httpcreator.NewHandler(creatorSvc)
+
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
-		_ = feedSvc.AppendTimeline(ctx, videoID)
+		seq, err := seqGen.NextPublishSeq(ctx)
+		if err == nil && seq > 0 {
+			_ = videoRepo.UpdatePublishSeq(ctx, videoID, seq)
+			_ = feedSvc.AppendTimelineWithSeq(ctx, videoID, seq)
+		} else {
+			_ = feedSvc.AppendTimeline(ctx, videoID)
+		}
 	})
 
 	gin.SetMode(gin.TestMode)
@@ -184,6 +203,7 @@ func setupE2ETest(t *testing.T) (*gin.Engine, string, func()) {
 	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
 	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
 	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
+	httpcreator.RegisterRoutes(engine, creatorHandler, jwtMgr, tokenStore, rdb)
 
 	cleanup := func() {
 		_ = os.RemoveAll(tempDir)
@@ -215,6 +235,13 @@ type e2eExtendedCtx struct {
 	Consumer       *servicenotification.Consumer
 	TokenStore     domainaccount.TokenStore
 	PlaybackSvc    serviceplayback.Service
+	DraftRepo      domaincreator.DraftRepository
+	TaskRepo       domaincreator.ScheduledTaskRepository
+	VideoRepo      domainvideo.Repository
+	SeqGen         domaincreator.SequenceGenerator
+	Scheduler      *infrascheduler.DelayedScheduler
+	CreatorSvc     servicecreator.Service
+	CreatorHandler *httpcreator.Handler
 }
 
 
@@ -319,8 +346,21 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
+	draftRepo := persistencecreator.NewDraftRepository(db)
+	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
+	seqGen := redis.NewSequenceGenerator(rdb)
+	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
+	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
+	creatorHandler := httpcreator.NewHandler(creatorSvc)
+
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
-		_ = feedSvc.AppendTimeline(ctx, videoID)
+		seq, err := seqGen.NextPublishSeq(ctx)
+		if err == nil && seq > 0 {
+			_ = videoRepo.UpdatePublishSeq(ctx, videoID, seq)
+			_ = feedSvc.AppendTimelineWithSeq(ctx, videoID, seq)
+		} else {
+			_ = feedSvc.AppendTimeline(ctx, videoID)
+		}
 	})
 
 	gin.SetMode(gin.TestMode)
@@ -336,6 +376,7 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	httpfeed.RegisterRoutes(engine, feedHandler, jwtMgr, tokenStore, rdb)
 	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
 	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
+	httpcreator.RegisterRoutes(engine, creatorHandler, jwtMgr, tokenStore, rdb)
 
 	notifRepo := persistencenotification.NewRepository(db)
 	notifBroadcaster, _ := redis.NewRedisBroadcaster(rdb, redis.ChannelNotifications)
@@ -354,6 +395,7 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	notifConsumer, _ := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, repo)
 
 	cleanup := func() {
+		delayedScheduler.Stop()
 		cancelHub()
 		_ = sseHub.Close()
 		_ = notifBroadcaster.Close()
@@ -386,6 +428,13 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		Consumer:       notifConsumer,
 		TokenStore:     tokenStore,
 		PlaybackSvc:    playbackSvc,
+		DraftRepo:      draftRepo,
+		TaskRepo:       taskRepo,
+		VideoRepo:      videoRepo,
+		SeqGen:         seqGen,
+		Scheduler:      delayedScheduler,
+		CreatorSvc:     creatorSvc,
+		CreatorHandler: creatorHandler,
 	}, cleanup
 }
 

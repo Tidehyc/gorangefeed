@@ -13,6 +13,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpcreator "github.com/Tidehyc/gorangefeed/internal/http/creator"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
 	httpnotification "github.com/Tidehyc/gorangefeed/internal/http/notification"
@@ -25,6 +26,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
@@ -34,8 +36,10 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	"github.com/Tidehyc/gorangefeed/internal/infra/router"
+	infrascheduler "github.com/Tidehyc/gorangefeed/internal/infra/scheduler"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	servicecreator "github.com/Tidehyc/gorangefeed/internal/service/creator"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
@@ -175,10 +179,26 @@ func main() {
 	playbackSvc := serviceplayback.NewService()
 	playbackHandler := httpplayback.NewHandler(playbackSvc)
 
-	// Hook into video publishing to append published videos to timeline
+	// 8.7 Assemble Creator Center Domain & Distributed Sequence Generator
+	draftRepo := persistencecreator.NewDraftRepository(db)
+	taskRepo := persistencecreator.NewScheduledTaskRepository(db)
+	seqGen := redis.NewSequenceGenerator(rdb)
+	delayedScheduler := infrascheduler.NewDelayedScheduler(rdb, taskRepo, videoRepo, draftRepo, seqGen, timelineRepo, pageCache, nil)
+	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
+	creatorHandler := httpcreator.NewHandler(creatorSvc)
+
+	// Hook into video publishing to allocate monotonic publish_seq and append to timeline
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
-		if err := feedSvc.AppendTimeline(ctx, videoID); err != nil {
-			l.Warn("failed to append published video to feed timeline", "video_id", videoID, "error", err)
+		seq, err := seqGen.NextPublishSeq(ctx)
+		if err == nil && seq > 0 {
+			_ = videoRepo.UpdatePublishSeq(ctx, videoID, seq)
+			if err := feedSvc.AppendTimelineWithSeq(ctx, videoID, seq); err != nil {
+				l.Warn("failed to append published video to feed timeline with seq", "video_id", videoID, "seq", seq, "error", err)
+			}
+		} else {
+			if err := feedSvc.AppendTimeline(ctx, videoID); err != nil {
+				l.Warn("failed to append published video to feed timeline", "video_id", videoID, "error", err)
+			}
 		}
 	})
 
@@ -205,6 +225,7 @@ func main() {
 	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
 	httpnotification.RegisterRoutes(engine, notifHandler, jwtMgr, tokenStore, rdb)
 	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
+	httpcreator.RegisterRoutes(engine, creatorHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
