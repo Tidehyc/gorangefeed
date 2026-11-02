@@ -296,5 +296,35 @@ sequenceDiagram
 | **E2E-M5-09** | 跨节点多实例实时广播 | 启动 Node 1 与 Node 2；用户 A 连接在 Node 1；在 Node 2 触发点赞用户 A 视频 | Node 2 写入 DB 并发布 Redis Pub/Sub；Node 1 成功接收广播并在 100ms 内向用户 A 推流，非本地节点 O(1) 过滤丢弃 |
 | **E2E-M5-10** | 节点停机优雅 Drain 与跨节点漂移 | 用户 A 连接在 Node 1；优雅关闭 Node 1（发送 SIGTERM）；在停机期间产生 2 条通知；客户端重连至 Node 2 并携带 `Last-Event-ID` | Node 1 正确发送 `: server_restarting` 并平滑断开；Node 2 成功接管重连，补推 2 条未读通知后继续接收实时推流 |
 
+---
+
+## 五、M6 性能压测与播放 QoS 体验监控架构决策
+
+### 5.1 跨项目对比与方案优化决策
+
+| 维度 | `feedsystem_video_go` 实现 | `GCFeed` 实现 | 工业界最佳实践（TikTok / Bilibili） | GoRangeFeed 优化决策（取长补短与落地） |
+|---|---|---|---|---|
+| **端侧播放预加载策略与端云协同 (FR-QOS-01)** | 仅返回静态媒体链接，无预加载指导，端侧串行拉流，首帧卡顿明显。 | 无播放体验与策略配置接口。 | 依据网络环境（WiFi/5G/4G/弱网）动态下发滑动预加载队列（预加载后续 1~3 条视频的头部分片），兼顾首帧秒开与流量开销。 | **自适应端云预加载配置**：暴露 `GET /api/v1/playback/config`；基于客户端 `network_type` 动态决策预加载条数（WiFi: 3 条，蜂窝: 1 条）、起播首帧缓冲阈值（300ms）与最大缓冲阈值（5000ms），与 HTTP 206 Partial Content 流畅协同。 |
+| **播放体验 QoS 度量与指标大盘 (FR-QOS-02)** | 仅有粗粒度曝光与播放计数字段，缺少客户端播放体验与故障度量。 | 仅记录离线日志，无实时流聚合，无法直观反映秒开与卡顿率。 | 客户端全生命周期埋点上报首帧耗时、卡顿次数/时长、完播时长，直连 APM / Prometheus 告警大盘。 | **标准化体验埋点与 Prometheus 导出**：暴露 `POST /api/v1/playback/events` 批量/单条上报接口；导出 `playback_first_frame_duration_seconds`（直方图分位）、`playback_stutter_events_total`、`playback_stutter_duration_seconds`、`playback_completion_total`、`playback_sessions_total`，支撑生产级 QoS 大盘。 |
+| **高并发性能基准压测套件 (NFR-PERF-01~04)** | 仅有零散功能单元测试，无系统级并发压测代码与报告。 | 无原生自动化压测工具链，性能极限未知。 | 具备全链路自动化压测框架，定期回归高并发 P99 延迟与热点行锁表现。 | **原生 Go Benchmark 压测套件**：建立 `test/benchmark/`，开箱即测四大核心链路（Feed 读链路 L1+Hydration、热榜分钟桶聚合、单视频 300 并发点赞事务行锁、Outbox 租约抢占吞吐），产出量化压测分析报告。 |
+
+### 5.2 核心接口与契约规范
+
+| 业务域 | 方法 | 路径 | 鉴权方式 | 核心入参 / Body | 成功响应核心字段 |
+|---|---|---|---|---|---|
+| **QoS 域** | `GET` | `/api/v1/playback/config` | SoftJWTAuth | Query: `network_type` (`wifi` \| `5g` \| `4g` \| `weak_net`) | `{ preload_count: 3, initial_buffer_ms: 300, max_buffer_ms: 5000, bitrate_level: "high" }` |
+| | `POST` | `/api/v1/playback/events` | SoftJWTAuth | `video_id`, `first_frame_ms`, `stutter_count`, `stutter_duration_ms`, `play_duration_ms`, `video_duration_ms`, `is_completed`, `network_type` | `{ success: true, processed_count: 1 }` |
+
+### 5.3 Prometheus 监控指标规范
+
+| 指标名称 | 类型 | 标签 (Labels) | 业务含义 |
+|---|---|---|---|
+| `playback_first_frame_duration_seconds` | Histogram | `network_type` | 视频播放首帧渲染耗时分位分布（P50/P90/P99），评估秒开体验 |
+| `playback_stutter_events_total` | Counter | `network_type` | 播放过程卡顿事件发生总次数 |
+| `playback_stutter_duration_seconds` | Counter | `network_type` | 播放卡顿累计停顿耗时（秒） |
+| `playback_completion_total` | Counter | `network_type` | 视频完整播放达标总次数 |
+| `playback_sessions_total` | Counter | `network_type` | 播放会话总上报次数（用于计算完播率与卡顿率） |
+
+
 
 

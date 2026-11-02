@@ -16,6 +16,7 @@ import (
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
 	httpnotification "github.com/Tidehyc/gorangefeed/internal/http/notification"
+	httpplayback "github.com/Tidehyc/gorangefeed/internal/http/playback"
 	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
@@ -38,6 +39,7 @@ import (
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
+	serviceplayback "github.com/Tidehyc/gorangefeed/internal/service/playback"
 	servicerelation "github.com/Tidehyc/gorangefeed/internal/service/relation"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
@@ -169,6 +171,10 @@ func main() {
 	}
 	notifHandler := httpnotification.NewHandler(notifSvc, sseHub)
 
+	// 8.6 Assemble Playback QoS Domain
+	playbackSvc := serviceplayback.NewService()
+	playbackHandler := httpplayback.NewHandler(playbackSvc)
+
 	// Hook into video publishing to append published videos to timeline
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
 		if err := feedSvc.AppendTimeline(ctx, videoID); err != nil {
@@ -198,6 +204,7 @@ func main() {
 	httpinteraction.RegisterRoutes(engine, interactionHandler, jwtMgr, tokenStore, rdb)
 	httprelation.RegisterRoutes(engine, relationHandler, jwtMgr, tokenStore, rdb)
 	httpnotification.RegisterRoutes(engine, notifHandler, jwtMgr, tokenStore, rdb)
+	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

@@ -17,6 +17,7 @@ import (
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
 	httpnotification "github.com/Tidehyc/gorangefeed/internal/http/notification"
+	httpplayback "github.com/Tidehyc/gorangefeed/internal/http/playback"
 	httprelation "github.com/Tidehyc/gorangefeed/internal/http/relation"
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
@@ -46,6 +47,7 @@ import (
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
+	serviceplayback "github.com/Tidehyc/gorangefeed/internal/service/playback"
 	servicerelation "github.com/Tidehyc/gorangefeed/internal/service/relation"
 	serviceupload "github.com/Tidehyc/gorangefeed/internal/service/upload"
 	servicevideo "github.com/Tidehyc/gorangefeed/internal/service/video"
@@ -212,6 +214,7 @@ type e2eExtendedCtx struct {
 	Broadcaster    *redis.RedisBroadcaster
 	Consumer       *servicenotification.Consumer
 	TokenStore     domainaccount.TokenStore
+	PlaybackSvc    serviceplayback.Service
 }
 
 
@@ -343,6 +346,10 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	notifHandler := httpnotification.NewHandler(notifSvc, sseHub)
 	httpnotification.RegisterRoutes(engine, notifHandler, jwtMgr, tokenStore, rdb)
 
+	playbackSvc := serviceplayback.NewService()
+	playbackHandler := httpplayback.NewHandler(playbackSvc)
+	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
+
 	deduplicator := rabbitmq.NewDeduplicator(db)
 	notifConsumer, _ := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, repo)
 
@@ -378,6 +385,7 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		Broadcaster:    notifBroadcaster,
 		Consumer:       notifConsumer,
 		TokenStore:     tokenStore,
+		PlaybackSvc:    playbackSvc,
 	}, cleanup
 }
 
