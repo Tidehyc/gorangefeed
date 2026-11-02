@@ -191,6 +191,7 @@ func (s *Service) CreateComment(ctx context.Context, userID, videoID, parentID i
 		"video_id":     videoID,
 		"parent_id":    parentID,
 		"author_id":    v.AuthorID,
+		"content":      comment.Content,
 		"commented_at": time.Now(),
 	})
 	if err != nil {

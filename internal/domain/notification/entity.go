@@ -3,6 +3,9 @@ package notification
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -69,6 +72,42 @@ type cursorPayload struct {
 	ID        int64  `json:"id"`
 }
 
+// Validate checks business integrity constraints on Notification.
+func (n *Notification) Validate() error {
+	if n == nil {
+		return errors.New("notification cannot be nil")
+	}
+	if n.RecipientID <= 0 {
+		return ErrInvalidRecipientID
+	}
+	if n.ActorID <= 0 && n.Type != TypeSystem {
+		return ErrInvalidActorID
+	}
+	if n.RecipientID == n.ActorID && n.Type != TypeSystem {
+		return ErrSelfNotification
+	}
+
+	nType := strings.ToLower(strings.TrimSpace(n.Type))
+	if !ValidTypes[nType] {
+		return ErrInvalidType
+	}
+
+	title := strings.TrimSpace(n.Title)
+	if title == "" {
+		return ErrEmptyTitle
+	}
+	if len([]rune(title)) > MaxTitleLength {
+		return ErrTitleTooLong
+	}
+
+	content := strings.TrimSpace(n.Content)
+	if len([]rune(content)) > MaxContentLength {
+		return ErrContentTooLong
+	}
+
+	return nil
+}
+
 // NewNotification constructs and validates a new Notification entity.
 func NewNotification(
 	recipientID, actorID int64,
@@ -76,46 +115,22 @@ func NewNotification(
 	targetID int64,
 	title, content, eventID string,
 ) (*Notification, error) {
-	if recipientID <= 0 {
-		return nil, ErrInvalidRecipientID
-	}
-	if actorID <= 0 && nType != TypeSystem {
-		return nil, ErrInvalidActorID
-	}
-	if recipientID == actorID && nType != TypeSystem {
-		return nil, ErrSelfNotification
-	}
-
-	nType = strings.ToLower(strings.TrimSpace(nType))
-	if !ValidTypes[nType] {
-		return nil, ErrInvalidType
-	}
-
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return nil, ErrEmptyTitle
-	}
-	if len([]rune(title)) > MaxTitleLength {
-		return nil, ErrTitleTooLong
-	}
-
-	content = strings.TrimSpace(content)
-	if len([]rune(content)) > MaxContentLength {
-		return nil, ErrContentTooLong
-	}
-
-	return &Notification{
+	n := &Notification{
 		RecipientID: recipientID,
 		ActorID:     actorID,
-		Type:        nType,
+		Type:        strings.ToLower(strings.TrimSpace(nType)),
 		TargetType:  strings.ToLower(strings.TrimSpace(targetType)),
 		TargetID:    targetID,
-		Title:       title,
-		Content:     content,
+		Title:       strings.TrimSpace(title),
+		Content:     strings.TrimSpace(content),
 		EventID:     strings.TrimSpace(eventID),
 		IsRead:      false,
 		CreatedAt:   time.Now().UTC(),
-	}, nil
+	}
+	if err := n.Validate(); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // MarkAsRead transitions the notification to read state.
@@ -202,3 +217,29 @@ func DecodeNotificationCursor(raw string) (*NotificationCursor, error) {
 		ID:        payload.ID,
 	}, nil
 }
+
+// SSEEventID formats the event ID for SSE stream (timestamp in ms + notification id).
+func (n *Notification) SSEEventID() string {
+	if n == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d", n.CreatedAt.UnixMilli(), n.ID)
+}
+
+// ParseSSEEventID parses a Last-Event-ID header (e.g. "1730000000000:101") into timestamp and notification ID.
+func ParseSSEEventID(raw string) (time.Time, int64, error) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return time.Time{}, 0, ErrInvalidEventID
+	}
+	ms, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}, 0, ErrInvalidEventID
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || id <= 0 {
+		return time.Time{}, 0, ErrInvalidEventID
+	}
+	return time.UnixMilli(ms).UTC(), id, nil
+}
+

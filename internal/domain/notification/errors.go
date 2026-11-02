@@ -14,4 +14,5 @@ var (
 	ErrContentTooLong        = errors.New("notification content exceeds maximum length")
 	ErrSelfNotification      = errors.New("cannot notify oneself")
 	ErrTicketExpired         = errors.New("sse ticket is invalid or expired")
+	ErrInvalidEventID        = errors.New("invalid event id format")
 )

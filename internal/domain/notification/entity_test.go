@@ -1,6 +1,7 @@
 package notification_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -181,3 +182,45 @@ func TestNotificationCursor_EncodeDecode(t *testing.T) {
 		t.Fatalf("expected ErrInvalidCursor, got %v", err)
 	}
 }
+
+func TestNotification_SSEEventID(t *testing.T) {
+	ts := time.Date(2026, 11, 2, 15, 30, 0, 0, time.UTC)
+	n := &domainnotification.Notification{
+		ID:        42,
+		CreatedAt: ts,
+	}
+
+	sseID := n.SSEEventID()
+	expectedPrefix := fmt.Sprintf("%d:42", ts.UnixMilli())
+	if sseID != expectedPrefix {
+		t.Fatalf("expected %s, got %s", expectedPrefix, sseID)
+	}
+
+	parsedTime, parsedID, err := domainnotification.ParseSSEEventID(sseID)
+	if err != nil {
+		t.Fatalf("unexpected error parsing SSEEventID: %v", err)
+	}
+	if parsedID != 42 {
+		t.Fatalf("expected id 42, got %d", parsedID)
+	}
+	if parsedTime.UnixMilli() != ts.UnixMilli() {
+		t.Fatalf("expected time %v, got %v", ts, parsedTime)
+	}
+
+	// Invalid inputs
+	_, _, err = domainnotification.ParseSSEEventID("")
+	if err != domainnotification.ErrInvalidEventID {
+		t.Fatalf("expected ErrInvalidEventID, got %v", err)
+	}
+
+	_, _, err = domainnotification.ParseSSEEventID("abc:def")
+	if err != domainnotification.ErrInvalidEventID {
+		t.Fatalf("expected ErrInvalidEventID, got %v", err)
+	}
+
+	_, _, err = domainnotification.ParseSSEEventID("12345")
+	if err != domainnotification.ErrInvalidEventID {
+		t.Fatalf("expected ErrInvalidEventID, got %v", err)
+	}
+}
+

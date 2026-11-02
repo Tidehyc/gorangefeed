@@ -16,12 +16,15 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	"github.com/Tidehyc/gorangefeed/internal/infra/outbox"
+	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
 	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
+	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -228,6 +231,52 @@ func main() {
 		}
 	}()
 
+	// 8.2 Initialize RabbitMQ Consumer for System Notifications & Redis Pub/Sub Broadcast
+	notifBroadcaster, err := redis.NewRedisBroadcaster(rdb, redis.ChannelNotifications)
+	if err != nil {
+		l.Error("worker failed to initialize notification redis broadcaster", "error", err)
+		os.Exit(1)
+	}
+	accountRepo := persistenceaccount.NewRepository(db)
+	notifRepo := persistencenotification.NewRepository(db)
+	notifConsumer, err := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, accountRepo)
+	if err != nil {
+		l.Error("worker failed to initialize notification consumer", "error", err)
+		os.Exit(1)
+	}
+
+	notifMQConsumer, err := rabbitmq.NewConsumer(
+		mqConn,
+		rabbitmq.ExchangeEvents,
+		rabbitmq.QueueNotification,
+		[]string{
+			rabbitmq.RoutingKeyInteractionLiked,
+			rabbitmq.RoutingKeyInteractionCommented,
+			rabbitmq.RoutingKeyRelationFollowed,
+		},
+		20,
+	)
+	if err != nil {
+		l.Error("worker failed to initialize notification rabbitmq consumer", "error", err)
+		os.Exit(1)
+	}
+
+	go func() {
+		l.Info("starting notification consumer", "queue", rabbitmq.QueueNotification)
+		err := notifMQConsumer.Start(ctx, func(msgCtx context.Context, d amqp.Delivery) error {
+			eventID := d.MessageId
+			if eventID == "" {
+				if val, ok := d.Headers["event_id"].(string); ok {
+					eventID = val
+				}
+			}
+			return notifConsumer.HandleEvent(msgCtx, eventID, d.RoutingKey, d.Body)
+		})
+		if err != nil && !errors.Is(err, context.Canceled) {
+			l.Error("notification consumer encountered error", "error", err)
+		}
+	}()
+
 	l.Info("Worker service running and ready for event dispatching and consumption")
 
 	// 9. Signal handling for graceful shutdown
@@ -246,7 +295,10 @@ func main() {
 		l.Warn("error shutting down worker metrics server", "error", err)
 	}
 
-	// 8. Cleanup resources
+	// 11. Cleanup resources
+	if err := notifBroadcaster.Close(); err != nil {
+		l.Warn("error closing notification broadcaster", "error", err)
+	}
 	if err := mqConn.Close(); err != nil {
 		l.Warn("error closing RabbitMQ connection", "error", err)
 	}
