@@ -30,12 +30,13 @@ func (VideoModel) TableName() string {
 
 // VideoStatModel maps to the `video_stats` database table.
 type VideoStatModel struct {
-	VideoID      int64     `gorm:"column:video_id;primaryKey"`
-	LikeCount    int64     `gorm:"column:like_count;not null;default:0"`
-	CommentCount int64     `gorm:"column:comment_count;not null;default:0"`
-	ViewCount    int64     `gorm:"column:view_count;not null;default:0"`
-	CreatedAt    time.Time `gorm:"column:created_at;autoCreateTime"`
-	UpdatedAt    time.Time `gorm:"column:updated_at;autoUpdateTime"`
+	VideoID       int64     `gorm:"column:video_id;primaryKey"`
+	LikeCount     int64     `gorm:"column:like_count;not null;default:0"`
+	CommentCount  int64     `gorm:"column:comment_count;not null;default:0"`
+	ViewCount     int64     `gorm:"column:view_count;not null;default:0"`
+	FavoriteCount int64     `gorm:"column:favorite_count;not null;default:0"`
+	CreatedAt     time.Time `gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt     time.Time `gorm:"column:updated_at;autoUpdateTime"`
 }
 
 // TableName returns the table name for VideoStatModel.
@@ -73,12 +74,13 @@ func toDomainStats(m *VideoStatModel) *domainvideo.VideoStats {
 		return nil
 	}
 	return &domainvideo.VideoStats{
-		VideoID:      m.VideoID,
-		LikeCount:    m.LikeCount,
-		CommentCount: m.CommentCount,
-		ViewCount:    m.ViewCount,
-		CreatedAt:    m.CreatedAt,
-		UpdatedAt:    m.UpdatedAt,
+		VideoID:       m.VideoID,
+		LikeCount:     m.LikeCount,
+		CommentCount:  m.CommentCount,
+		ViewCount:     m.ViewCount,
+		FavoriteCount: m.FavoriteCount,
+		CreatedAt:     m.CreatedAt,
+		UpdatedAt:     m.UpdatedAt,
 	}
 }
 

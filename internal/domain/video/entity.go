@@ -80,12 +80,13 @@ func (v *Video) Validate() error {
 // VideoStats represents engagement metrics for a video, decoupled from the video entity
 // to isolate high-frequency write contention.
 type VideoStats struct {
-	VideoID      int64     `json:"video_id"`
-	LikeCount    int64     `json:"like_count"`
-	CommentCount int64     `json:"comment_count"`
-	ViewCount    int64     `json:"view_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	VideoID       int64     `json:"video_id"`
+	LikeCount     int64     `json:"like_count"`
+	CommentCount  int64     `json:"comment_count"`
+	ViewCount     int64     `json:"view_count"`
+	FavoriteCount int64     `json:"favorite_count"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // AuthorProfile provides public author identity details embedded in video responses.
@@ -98,8 +99,9 @@ type AuthorProfile struct {
 
 // VideoDetail aggregates the video entity, engagement metrics, author info, and viewer state.
 type VideoDetail struct {
-	Video   *Video         `json:"video"`
-	Stats   *VideoStats    `json:"stats"`
-	Author  *AuthorProfile `json:"author"`
-	IsLiked bool           `json:"is_liked"`
+	Video       *Video         `json:"video"`
+	Stats       *VideoStats    `json:"stats"`
+	Author      *AuthorProfile `json:"author"`
+	IsLiked     bool           `json:"is_liked"`
+	IsFavorited bool           `json:"is_favorited,omitempty"`
 }

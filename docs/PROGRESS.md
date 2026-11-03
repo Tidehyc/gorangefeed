@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **二期架构演进进行中：M7 创作中心与高可靠发布时序已全量通过验收（准备推进 M8: 视频收藏夹与播放历史资产中心）** |
-| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 8 / 8 项（100.0%） · M8~M10 规划中 |
-| **进行中任务** | M7 全生命周期通过验收，准备推进 M8 视频收藏夹与播放历史资产中心 (M8-01~M8-06) |
+| **当前阶段** | **二期架构演进进行中：M8 资产中心仓储与数据迁移落地（M8-01~M8-03 完成，准备推进 M8-04）** |
+| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 8 / 8 项（100%） · M8 阶段 3 / 6 项（50.0%） · M9~M10 规划中 |
+| **进行中任务** | M8 视频收藏夹与播放历史资产中心服务编排与热度加权 (M8-04) |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M8 阶段：编写 000011_create_favorites_and_history_tables 迁移脚本与资产中心领域模型 |
+| **下一步行动** | 推进 M8-04：在 internal/service/asset 实现业务服务编排、断点续播及热榜 3 倍收藏权重正向赋能 |
 
 
 
@@ -46,7 +46,7 @@
 | **M5** | 系统通知与分布式跨实例 SSE | FR-NOT-01~07 | `DONE` | 点赞/评论/关注/提及通知 P99 < 1s 异步落库；基于 Redis Pub/Sub 的跨实例广播秒级到达；SSE 在线推送与 60s 重叠窗口基于 Last-Event-ID 断线补拉验证完整 |
 | **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `DONE` | 核心链路达到性能设计指标并产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
 | **M7** | 创作中心与高可靠发布时序 | FR-CRT-*, NFR-REL-03 | `DONE` | 草稿箱全生命周期管理；秒级准点定时发布延迟队列调度；分布式发号器生成 `publish_seq` 彻底消除时间线翻页空洞 |
-| **M8** | 视频收藏夹与播放历史资产中心 | FR-INT-08, FR-USR-04 | `TODO` | 默认与自定义多收藏夹；播放历史滑动窗口保留与断点续播；高权重收藏事件正向加权热榜与推荐召回 |
+| **M8** | 视频收藏夹与播放历史资产中心 | FR-INT-08, FR-USR-04 | `DOING` | 默认与自定义多收藏夹；播放历史滑动窗口保留与断点续播；高权重收藏事件正向加权热榜与推荐召回 |
 | **M9** | 内容合规与安全审核中台 | NFR-SEC-08, FR-ADM-* | `TODO` | 先审后发/先发后审双轨制；Aho-Corasick 高效敏感词机审引擎；运营后台违规下架与用户封禁处罚 |
 | **M10**| 全栈 Web 短视频流式演示客户端 | FR-WEB-* | `TODO` | 响应式 Web 视频流上下滑播放；双击点赞动画；实时 SSE 通知浮窗展示；QoS 观测面板展示 |
 
@@ -228,9 +228,9 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M8-01** | 收藏夹与播放历史数据表迁移 | M0-05 | 编写 `000011_create_favorites_and_history_tables` 迁移脚本；创建 `favorites`（收藏夹元数据）、`favorite_items`（收藏关系表，`UNIQUE(favorite_id, video_id)`）、`watch_history`（历史观看记录表）；在 `video_stats` 增加 `favorite_count` 字段；通过 migrate up/down 验证 | `TODO` |
-| **M8-02** | 收藏与历史领域模型与仓储契约定义 | — | 在 `internal/domain/asset` 定义 `FavoriteFolder` 聚合根、`FavoriteItem`、`WatchHistory` 实体、滑动窗口保留策略值对象与仓储契约；单元测试覆盖 | `TODO` |
-| **M8-03** | 收藏夹与播放历史持久化仓储实现 | M8-01, M8-02 | 在 `internal/infra/persistence/asset` 实现仓储；基于 Redis ZSet 实现单个用户最近 100 条播放历史毫秒级滑动维护，异步落库 MySQL；实现默认收藏夹自动初始化与多收藏夹归类；原子同步自增/自减 `video_stats.favorite_count` | `TODO` |
+| **M8-01** | 收藏夹与播放历史数据表迁移 | M0-05 | 编写 `000011_create_favorites_and_history_tables` 迁移脚本；创建 `favorites`（收藏夹元数据）、`favorite_items`（收藏关系表，`UNIQUE(favorite_id, video_id)`）、`watch_history`（历史观看记录表）；在 `video_stats` 增加 `favorite_count` 字段；通过 migrate up/down 验证 | `DONE` |
+| **M8-02** | 收藏与历史领域模型与仓储契约定义 | — | 在 `internal/domain/asset` 定义 `FavoriteFolder` 聚合根、`FavoriteItem`、`WatchHistory` 实体、滑动窗口保留策略值对象与仓储契约；单元测试覆盖 | `DONE` |
+| **M8-03** | 收藏夹与播放历史持久化仓储实现 | M8-01, M8-02 | 在 `internal/infra/persistence/asset` 实现仓储；基于 Redis ZSet 实现单个用户最近 100 条播放历史毫秒级滑动维护，异步落库 MySQL；实现默认收藏夹自动初始化与多收藏夹归类；原子同步自增/自减 `video_stats.favorite_count` | `DONE` |
 | **M8-04** | 资产中心服务编排与热度推荐正向加权 | M8-03, M4.5 | 在 `internal/service/asset` 实现业务服务：收藏/取消收藏、历史进度记录与断点续播查询；触发 `interaction.favorited` 事件，在热榜滑动分钟桶给予 3 倍于点赞的高权重热度赋能；单元测试覆盖 | `TODO` |
 | **M8-05** | 资产中心 HTTP 控制器与全路由挂载 | M8-04 | 在 `internal/http/asset` 暴露 `POST/DELETE /api/v1/videos/:id/favorite`、`GET/POST/DELETE /api/v1/user/favorites`、`GET /api/v1/user/history`；全依赖组装与路由注册；Handler 单测 | `TODO` |
 | **M8-06** | M8 资产中心全生命周期 E2E 集成测试 | M8-05 | 在 `test/e2e/asset_lifecycle_test.go` 中验证黑盒测试：收藏与取消收藏原子计数流转 → 默认收藏夹与自定义收藏夹分类管理 → 跨设备断点续播进度保存与历史滑动窗口修剪 → 收藏行为驱动热榜热度倍增与推荐流正向加权断言 → `make vet && make test` 全量绿灯回归 | `TODO` |

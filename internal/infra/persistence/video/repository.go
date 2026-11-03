@@ -54,10 +54,11 @@ func (r *gormRepository) CreateWithStatsAndOutbox(ctx context.Context, video *do
 		video.UpdatedAt = m.UpdatedAt
 
 		statModel := &VideoStatModel{
-			VideoID:      m.ID,
-			LikeCount:    stats.LikeCount,
-			CommentCount: stats.CommentCount,
-			ViewCount:    stats.ViewCount,
+			VideoID:       m.ID,
+			LikeCount:     stats.LikeCount,
+			CommentCount:  stats.CommentCount,
+			ViewCount:     stats.ViewCount,
+			FavoriteCount: stats.FavoriteCount,
 		}
 		if err := tx.Create(statModel).Error; err != nil {
 			return fmt.Errorf("create video_stats error: %w", err)
