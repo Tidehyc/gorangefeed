@@ -12,7 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	domainmoderation "github.com/Tidehyc/gorangefeed/internal/domain/moderation"
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpadmin "github.com/Tidehyc/gorangefeed/internal/http/admin"
 	httpasset "github.com/Tidehyc/gorangefeed/internal/http/asset"
 	httpcreator "github.com/Tidehyc/gorangefeed/internal/http/creator"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
@@ -30,6 +32,7 @@ import (
 	persistenceasset "github.com/Tidehyc/gorangefeed/internal/infra/persistence/asset"
 	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistencemoderation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/moderation"
 	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
 	persistencerelation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/relation"
@@ -44,6 +47,7 @@ import (
 	serviceasset "github.com/Tidehyc/gorangefeed/internal/service/asset"
 	servicecreator "github.com/Tidehyc/gorangefeed/internal/service/creator"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
+	servicemoderation "github.com/Tidehyc/gorangefeed/internal/service/moderation"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
 	serviceplayback "github.com/Tidehyc/gorangefeed/internal/service/playback"
@@ -203,8 +207,19 @@ func main() {
 	}
 	assetHandler := httpasset.NewHandler(assetSvc)
 
+	// 8.9 Assemble Content Moderation & Compliance Domain
+	moderationRepo := persistencemoderation.NewRepository(db)
+	acMatcher := servicemoderation.NewACMatcher()
+	moderationSvc := servicemoderation.NewService(moderationRepo, acMatcher, videoRepo, timelineRepo, accountRepo, tokenStore, l)
+	adminHandler := httpadmin.NewHandler(moderationSvc)
+
 	// Hook into video publishing to allocate monotonic publish_seq and append to timeline
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
+		// Trigger asynchronous content compliance scan
+		if v, _, err := videoRepo.FindDetailByID(ctx, videoID); err == nil && v != nil {
+			_, _ = moderationSvc.SubmitVideoForReview(ctx, videoID, domainmoderation.ReviewPolicyPostReview, v.Title, v.Description)
+		}
+
 		seq, err := seqGen.NextPublishSeq(ctx)
 		if err == nil && seq > 0 {
 			_ = videoRepo.UpdatePublishSeq(ctx, videoID, seq)
@@ -243,6 +258,7 @@ func main() {
 	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
 	httpcreator.RegisterRoutes(engine, creatorHandler, jwtMgr, tokenStore, rdb)
 	httpasset.RegisterRoutes(engine, assetHandler, jwtMgr, tokenStore, rdb)
+	httpadmin.RegisterRoutes(engine, adminHandler, jwtMgr, tokenStore)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
