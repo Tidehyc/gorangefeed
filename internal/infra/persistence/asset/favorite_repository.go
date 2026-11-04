@@ -41,11 +41,12 @@ func (r *favoriteRepository) GetOrCreateDefaultFolder(ctx context.Context, userI
 
 	// Default folder does not exist; initialize it
 	isDefaultVal := int8(1)
+	isPublicVal := int8(1)
 	defaultFolder := FavoriteModel{
 		UserID:      userID,
 		Name:        domainasset.DefaultFolderName,
 		Description: domainasset.DefaultFolderDesc,
-		IsPublic:    1,
+		IsPublic:    &isPublicVal,
 		IsDefault:   &isDefaultVal,
 		ItemCount:   0,
 	}

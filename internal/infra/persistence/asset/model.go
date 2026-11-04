@@ -12,7 +12,7 @@ type FavoriteModel struct {
 	UserID      int64     `gorm:"column:user_id;not null;index:idx_user_id;uniqueIndex:uk_user_default,priority:1"`
 	Name        string    `gorm:"column:name;type:varchar(64);not null;default:''"`
 	Description string    `gorm:"column:description;type:varchar(255);not null;default:''"`
-	IsPublic    int8      `gorm:"column:is_public;not null;default:1"`
+	IsPublic    *int8     `gorm:"column:is_public;not null;default:1"`
 	IsDefault   *int8     `gorm:"column:is_default;uniqueIndex:uk_user_default,priority:2;default:null"`
 	ItemCount   int64     `gorm:"column:item_count;not null;default:0"`
 	CreatedAt   time.Time `gorm:"column:created_at;autoCreateTime"`
@@ -75,7 +75,7 @@ func toDomainFolder(m *FavoriteModel) *domainasset.FavoriteFolder {
 		UserID:      m.UserID,
 		Name:        m.Name,
 		Description: m.Description,
-		IsPublic:    m.IsPublic == 1,
+		IsPublic:    m.IsPublic != nil && *m.IsPublic == 1,
 		IsDefault:   m.IsDefault != nil && *m.IsDefault == 1,
 		ItemCount:   m.ItemCount,
 		CreatedAt:   m.CreatedAt,
@@ -101,7 +101,7 @@ func fromDomainFolder(f *domainasset.FavoriteFolder) *FavoriteModel {
 		UserID:      f.UserID,
 		Name:        f.Name,
 		Description: f.Description,
-		IsPublic:    isPub,
+		IsPublic:    &isPub,
 		IsDefault:   isDef,
 		ItemCount:   f.ItemCount,
 		CreatedAt:   f.CreatedAt,

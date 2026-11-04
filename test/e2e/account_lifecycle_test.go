@@ -14,6 +14,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpasset "github.com/Tidehyc/gorangefeed/internal/http/asset"
 	httpcreator "github.com/Tidehyc/gorangefeed/internal/http/creator"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
@@ -23,6 +24,7 @@ import (
 	httpupload "github.com/Tidehyc/gorangefeed/internal/http/upload"
 	httpvideo "github.com/Tidehyc/gorangefeed/internal/http/video"
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
+	domainasset "github.com/Tidehyc/gorangefeed/internal/domain/asset"
 	domaincreator "github.com/Tidehyc/gorangefeed/internal/domain/creator"
 	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
 	domainnotification "github.com/Tidehyc/gorangefeed/internal/domain/notification"
@@ -34,6 +36,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/migration"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistenceasset "github.com/Tidehyc/gorangefeed/internal/infra/persistence/asset"
 	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
@@ -49,6 +52,7 @@ import (
 	infrascheduler "github.com/Tidehyc/gorangefeed/internal/infra/scheduler"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	serviceasset "github.com/Tidehyc/gorangefeed/internal/service/asset"
 	servicecreator "github.com/Tidehyc/gorangefeed/internal/service/creator"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
@@ -247,6 +251,10 @@ type e2eExtendedCtx struct {
 	Scheduler      *infrascheduler.DelayedScheduler
 	CreatorSvc     servicecreator.Service
 	CreatorHandler *httpcreator.Handler
+	AssetSvc       *serviceasset.Service
+	FavoriteRepo   domainasset.FavoriteRepository
+	HistoryRepo    domainasset.HistoryRepository
+	HotConsumer    *servicefeed.HotScoreConsumer
 }
 
 
@@ -399,8 +407,18 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	playbackHandler := httpplayback.NewHandler(playbackSvc)
 	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
 
+	favoriteRepo := persistenceasset.NewFavoriteRepository(db)
+	historyRepo := persistenceasset.NewHistoryRepository(db, rdb)
+	assetSvc, err := serviceasset.NewService(favoriteRepo, historyRepo, videoRepo)
+	if err != nil {
+		t.Fatalf("failed to initialize asset service: %v", err)
+	}
+	assetHandler := httpasset.NewHandler(assetSvc)
+	httpasset.RegisterRoutes(engine, assetHandler, jwtMgr, tokenStore, rdb)
+
 	deduplicator := rabbitmq.NewDeduplicator(db)
 	notifConsumer, _ := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, repo)
+	hotScoreConsumer, _ := servicefeed.NewHotScoreConsumer(hotStore, deduplicator)
 
 	cleanup := func() {
 		delayedScheduler.Stop()
@@ -445,6 +463,10 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		Scheduler:      delayedScheduler,
 		CreatorSvc:     creatorSvc,
 		CreatorHandler: creatorHandler,
+		AssetSvc:       assetSvc,
+		FavoriteRepo:   favoriteRepo,
+		HistoryRepo:    historyRepo,
+		HotConsumer:    hotScoreConsumer,
 	}, cleanup
 }
 

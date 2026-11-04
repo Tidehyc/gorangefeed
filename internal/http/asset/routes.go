@@ -24,10 +24,10 @@ func RegisterRoutes(
 	// Video favorite & playback breakpoint endpoints
 	videos := v1.Group("/videos")
 	{
-		videos.POST("/:id/favorite", jwtAuth, h.FavoriteVideo)
-		videos.DELETE("/:id/favorite", jwtAuth, h.UnfavoriteVideo)
-		videos.GET("/:id/history", jwtAuth, h.GetWatchProgress)
-		videos.POST("/:id/history", jwtAuth, h.RecordWatchProgress)
+		videos.POST("/:videoId/favorite", jwtAuth, h.FavoriteVideo)
+		videos.DELETE("/:videoId/favorite", jwtAuth, h.UnfavoriteVideo)
+		videos.GET("/:videoId/history", jwtAuth, h.GetWatchProgress)
+		videos.POST("/:videoId/history", jwtAuth, h.RecordWatchProgress)
 	}
 
 	// User asset center: favorite folders & playback history
