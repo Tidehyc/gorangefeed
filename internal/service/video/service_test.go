@@ -102,6 +102,9 @@ func (m *mockAccountRepo) UpdateProfile(ctx context.Context, id int64, nickname,
 func (m *mockAccountRepo) UpdateAvatar(ctx context.Context, id int64, avatarURL string) error {
 	return nil
 }
+func (m *mockAccountRepo) UpdateStatus(ctx context.Context, id int64, status domainaccount.UserStatus) error {
+	return nil
+}
 
 func TestService_PublishSuccess(t *testing.T) {
 	repo := &mockVideoRepo{

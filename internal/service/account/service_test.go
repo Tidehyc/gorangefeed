@@ -70,6 +70,15 @@ func (m *mockRepository) UpdateAvatar(ctx context.Context, id int64, avatarURL s
 	return nil
 }
 
+func (m *mockRepository) UpdateStatus(ctx context.Context, id int64, status domainaccount.UserStatus) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.Status = status
+	return nil
+}
+
 type mockTokenStore struct {
 	sessions    map[string]string // sessionID -> currentTokenID
 	blacklisted map[string]bool   // tokenID -> true

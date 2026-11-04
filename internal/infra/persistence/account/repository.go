@@ -78,3 +78,14 @@ func (r *gormRepository) UpdateAvatar(ctx context.Context, id int64, avatarURL s
 	}
 	return nil
 }
+
+func (r *gormRepository) UpdateStatus(ctx context.Context, id int64, status domainaccount.UserStatus) error {
+	res := r.db.WithContext(ctx).Model(&domainaccount.User{}).Where("id = ?", id).Update("status", status)
+	if res.Error != nil {
+		return fmt.Errorf("update status error: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return domainaccount.ErrUserNotFound
+	}
+	return nil
+}

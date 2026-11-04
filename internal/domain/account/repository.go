@@ -9,4 +9,5 @@ type Repository interface {
 	FindByUsername(ctx context.Context, username string) (*User, error)
 	UpdateProfile(ctx context.Context, id int64, nickname, bio string) error
 	UpdateAvatar(ctx context.Context, id int64, avatarURL string) error
+	UpdateStatus(ctx context.Context, id int64, status UserStatus) error
 }

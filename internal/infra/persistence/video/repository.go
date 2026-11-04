@@ -218,7 +218,7 @@ func (r *gormRepository) UpdateStatus(ctx context.Context, id int64, authorID in
 		return fmt.Errorf("find video for update status error: %w", err)
 	}
 
-	if m.AuthorID != authorID {
+	if authorID > 0 && m.AuthorID != authorID {
 		return domainvideo.ErrVideoForbidden
 	}
 

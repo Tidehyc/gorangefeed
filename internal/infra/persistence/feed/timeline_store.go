@@ -90,6 +90,17 @@ func (s *timelineStore) AppendWithSeq(ctx context.Context, videoID int64, seq in
 	return nil
 }
 
+func (s *timelineStore) Remove(ctx context.Context, videoID int64) error {
+	if videoID <= 0 {
+		return nil
+	}
+	member := strconv.FormatInt(videoID, 10)
+	if err := s.rdb.ZRem(ctx, s.globalKey, member).Err(); err != nil {
+		return fmt.Errorf("redis zrem timeline error: %w", err)
+	}
+	return nil
+}
+
 func (s *timelineStore) Trim(ctx context.Context, floor int64) error {
 	if floor <= 0 {
 		return nil

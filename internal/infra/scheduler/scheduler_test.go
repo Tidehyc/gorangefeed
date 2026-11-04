@@ -167,6 +167,7 @@ func (m *mockTimelineRepoForScheduler) AppendWithSeq(ctx context.Context, videoI
 	m.appendedSeq = seq
 	return nil
 }
+func (m *mockTimelineRepoForScheduler) Remove(ctx context.Context, videoID int64) error { return nil }
 func (m *mockTimelineRepoForScheduler) Trim(ctx context.Context, floor int64) error { return nil }
 func (m *mockTimelineRepoForScheduler) ListByCursor(ctx context.Context, cursor int64, limit int) ([]int64, error) {
 	return nil, nil

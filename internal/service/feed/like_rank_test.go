@@ -362,6 +362,9 @@ func (m *mockTimelineForSkeleton) Append(ctx context.Context, videoID int64) err
 func (m *mockTimelineForSkeleton) AppendWithSeq(ctx context.Context, videoID int64, seq int64) error {
 	return nil
 }
+func (m *mockTimelineForSkeleton) Remove(ctx context.Context, videoID int64) error {
+	return nil
+}
 func (m *mockTimelineForSkeleton) Trim(ctx context.Context, floor int64) error {
 	return nil
 }

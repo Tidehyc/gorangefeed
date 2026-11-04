@@ -15,6 +15,8 @@ type TimelineRepository interface {
 	Append(ctx context.Context, videoID int64) error
 	// AppendWithSeq adds a new video ID to the timeline using explicit publish sequence as score.
 	AppendWithSeq(ctx context.Context, videoID int64, seq int64) error
+	// Remove removes a video ID from the timeline (e.g. on takedown or deletion).
+	Remove(ctx context.Context, videoID int64) error
 	// Trim removes all entries with scores strictly below floor and sets the floor key atomically.
 	Trim(ctx context.Context, floor int64) error
 	// ListByCursor queries the timeline strictly below cursor (or from top if cursor=0) with limit.
