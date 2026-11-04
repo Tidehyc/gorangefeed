@@ -26,4 +26,6 @@ const (
 	RoutingKeyRelationUnfollowed       = "relation.unfollowed"
 	RoutingKeyVideoViewed              = "video.viewed"
 	RoutingKeyVideoCompleted           = "video.completed"
+	RoutingKeyInteractionFavorited     = "interaction.favorited"
+	RoutingKeyInteractionUnfavorited   = "interaction.unfavorited"
 )

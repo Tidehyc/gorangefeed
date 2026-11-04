@@ -1,6 +1,10 @@
 package asset
 
-import "context"
+import (
+	"context"
+
+	"github.com/Tidehyc/gorangefeed/internal/domain/outbox"
+)
 
 // FavoriteRepository defines persistence contracts for favorite folders and items.
 type FavoriteRepository interface {
@@ -16,11 +20,11 @@ type FavoriteRepository interface {
 	DeleteFolder(ctx context.Context, userID, folderID int64) error
 
 	// AddItem adds a video into a specific favorite folder, atomically updating item_count and video_stats.favorite_count.
-	// Returns true if newly inserted, false if already present in this folder.
-	AddItem(ctx context.Context, item *FavoriteItem) (bool, error)
+	// Optionally writes an outboxEvent within the same transaction. Returns true if newly inserted, false if already present in this folder.
+	AddItem(ctx context.Context, item *FavoriteItem, outboxEvent *outbox.Event) (bool, error)
 	// RemoveItem removes a video from a specific favorite folder, atomically updating item_count and video_stats.favorite_count.
-	// Returns true if removed, false if not present in this folder.
-	RemoveItem(ctx context.Context, favoriteID, videoID int64) (bool, error)
+	// Optionally writes an outboxEvent within the same transaction. Returns true if removed, false if not present in this folder.
+	RemoveItem(ctx context.Context, favoriteID, videoID int64, outboxEvent *outbox.Event) (bool, error)
 	// IsFavorited checks if a user has favorited a video in any folder.
 	IsFavorited(ctx context.Context, userID, videoID int64) (bool, error)
 	// BatchIsFavorited checks favorite status for multiple videos for a viewer.

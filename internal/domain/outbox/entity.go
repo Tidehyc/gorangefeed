@@ -27,6 +27,8 @@ const (
 	EventTypeInteractionCommentDelete = "interaction.comment_deleted"
 	EventTypeRelationFollowed         = "relation.followed"
 	EventTypeRelationUnfollowed       = "relation.unfollowed"
+	EventTypeInteractionFavorited     = "interaction.favorited"
+	EventTypeInteractionUnfavorited   = "interaction.unfavorited"
 )
 
 // Event represents an outbox message entity stored alongside domain state transactions.

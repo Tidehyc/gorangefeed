@@ -99,6 +99,10 @@ func (c *HotScoreConsumer) HandleEngagementEvent(ctx context.Context, eventID st
 		delta = domainfeed.ScorePlayDelta
 	case rabbitmq.RoutingKeyVideoCompleted:
 		delta = domainfeed.ScoreCompleteDelta
+	case rabbitmq.RoutingKeyInteractionFavorited:
+		delta = domainfeed.ScoreFavoriteDelta
+	case rabbitmq.RoutingKeyInteractionUnfavorited:
+		delta = domainfeed.ScoreUnfavoriteDelta
 	default:
 		// Unrecognized engagement event, skip
 		return nil

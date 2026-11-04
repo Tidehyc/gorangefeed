@@ -10,6 +10,7 @@ import (
 	"time"
 
 	domainasset "github.com/Tidehyc/gorangefeed/internal/domain/asset"
+	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
@@ -243,7 +244,7 @@ func TestFavoriteRepository_ItemFavoritesAndStatsAtomicCounting(t *testing.T) {
 		VideoID:    video.ID,
 		UserID:     userID,
 	}
-	inserted, err := favoriteRepo.AddItem(ctx, item)
+	inserted, err := favoriteRepo.AddItem(ctx, item, nil)
 	if err != nil {
 		t.Fatalf("failed to add item: %v", err)
 	}
@@ -267,7 +268,7 @@ func TestFavoriteRepository_ItemFavoritesAndStatsAtomicCounting(t *testing.T) {
 	}
 
 	// 5. Duplicate add is idempotent: returns false, counts unchanged
-	insertedAgain, err := favoriteRepo.AddItem(ctx, item)
+	insertedAgain, err := favoriteRepo.AddItem(ctx, item, nil)
 	if err != nil {
 		t.Fatalf("second add failed: %v", err)
 	}
@@ -302,7 +303,7 @@ func TestFavoriteRepository_ItemFavoritesAndStatsAtomicCounting(t *testing.T) {
 	}
 
 	// 8. RemoveItem
-	removed, err := favoriteRepo.RemoveItem(ctx, folder.ID, video.ID)
+	removed, err := favoriteRepo.RemoveItem(ctx, folder.ID, video.ID, nil)
 	if err != nil {
 		t.Fatalf("failed to remove item: %v", err)
 	}
@@ -325,7 +326,7 @@ func TestFavoriteRepository_ItemFavoritesAndStatsAtomicCounting(t *testing.T) {
 	}
 
 	// 11. Remove again: returns false, count never drops below 0
-	removedAgain, err := favoriteRepo.RemoveItem(ctx, folder.ID, video.ID)
+	removedAgain, err := favoriteRepo.RemoveItem(ctx, folder.ID, video.ID, nil)
 	if err != nil {
 		t.Fatalf("duplicate remove error: %v", err)
 	}
@@ -357,8 +358,8 @@ func TestFavoriteRepository_FolderDeletionCascading(t *testing.T) {
 		t.Fatalf("failed to create folder: %v", err)
 	}
 
-	_, _ = favoriteRepo.AddItem(ctx, &domainasset.FavoriteItem{FavoriteID: folder.ID, VideoID: v1.ID, UserID: userID})
-	_, _ = favoriteRepo.AddItem(ctx, &domainasset.FavoriteItem{FavoriteID: folder.ID, VideoID: v2.ID, UserID: userID})
+	_, _ = favoriteRepo.AddItem(ctx, &domainasset.FavoriteItem{FavoriteID: folder.ID, VideoID: v1.ID, UserID: userID}, nil)
+	_, _ = favoriteRepo.AddItem(ctx, &domainasset.FavoriteItem{FavoriteID: folder.ID, VideoID: v2.ID, UserID: userID}, nil)
 
 	// Check stats before deletion
 	var s1, s2 persistencevideo.VideoStatModel
@@ -507,5 +508,70 @@ func TestHistoryRepository_BreakpointResumeAndCacheFallback(t *testing.T) {
 	cleared, _ := historyRepo.GetProgress(ctx, userID, videoID)
 	if cleared != nil {
 		t.Fatalf("expected nil progress after clear, got %+v", cleared)
+	}
+}
+
+func TestFavoriteRepository_OutboxEventInTransaction(t *testing.T) {
+	db, _, favoriteRepo, _ := setupTestInfra(t)
+	ctx := context.Background()
+	userID := time.Now().UnixNano()
+
+	video := createTestVideoWithStats(t, db, userID)
+	folder, err := favoriteRepo.GetOrCreateDefaultFolder(ctx, userID)
+	if err != nil {
+		t.Fatalf("failed to get default folder: %v", err)
+	}
+
+	eventID := fmt.Sprintf("test_fav_evt_%d", time.Now().UnixNano())
+	outboxEvent := &domainoutbox.Event{
+		EventID:   eventID,
+		EventType: "interaction.favorited",
+		Payload:   []byte(fmt.Sprintf(`{"user_id":%d,"video_id":%d}`, userID, video.ID)),
+	}
+
+	item := &domainasset.FavoriteItem{
+		FavoriteID: folder.ID,
+		VideoID:    video.ID,
+		UserID:     userID,
+	}
+
+	inserted, err := favoriteRepo.AddItem(ctx, item, outboxEvent)
+	if err != nil {
+		t.Fatalf("failed to add item with outbox: %v", err)
+	}
+	if !inserted {
+		t.Fatalf("expected item to be inserted")
+	}
+
+	// Verify outbox row exists in MySQL
+	var count int64
+	if err := db.Table("outbox").Where("event_id = ?", eventID).Count(&count).Error; err != nil {
+		t.Fatalf("failed to query outbox: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 outbox event, got %d", count)
+	}
+
+	// Remove with outbox event
+	unfavEventID := fmt.Sprintf("test_unfav_evt_%d", time.Now().UnixNano())
+	unfavOutboxEvent := &domainoutbox.Event{
+		EventID:   unfavEventID,
+		EventType: "interaction.unfavorited",
+		Payload:   []byte(fmt.Sprintf(`{"user_id":%d,"video_id":%d}`, userID, video.ID)),
+	}
+
+	removed, err := favoriteRepo.RemoveItem(ctx, folder.ID, video.ID, unfavOutboxEvent)
+	if err != nil {
+		t.Fatalf("failed to remove item with outbox: %v", err)
+	}
+	if !removed {
+		t.Fatalf("expected remove to succeed")
+	}
+
+	if err := db.Table("outbox").Where("event_id = ?", unfavEventID).Count(&count).Error; err != nil {
+		t.Fatalf("failed to query outbox for unfavorite: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 unfavorite outbox event, got %d", count)
 	}
 }

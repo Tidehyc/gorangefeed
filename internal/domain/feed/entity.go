@@ -57,6 +57,8 @@ const (
 	ScoreCommentDeleteDelta = -5.0
 	ScorePlayDelta          = 0.5
 	ScoreCompleteDelta      = 2.0
+	ScoreFavoriteDelta      = 9.0  // 3x higher weight than like
+	ScoreUnfavoriteDelta    = -9.0
 )
 
 // NormalizeScene sanitizes and normalizes the scene string.
@@ -331,6 +333,8 @@ const (
 	ActionCommentDelete HotScoreAction = "comment_delete"
 	ActionPlay          HotScoreAction = "play"
 	ActionComplete      HotScoreAction = "complete"
+	ActionFavorite      HotScoreAction = "favorite"
+	ActionUnfavorite    HotScoreAction = "unfavorite"
 )
 
 // HotScoreEvent encapsulates an engagement event for hot timeline score calculation.

@@ -210,6 +210,8 @@ func main() {
 			rabbitmq.RoutingKeyInteractionCommentDelete,
 			rabbitmq.RoutingKeyVideoViewed,
 			rabbitmq.RoutingKeyVideoCompleted,
+			rabbitmq.RoutingKeyInteractionFavorited,
+			rabbitmq.RoutingKeyInteractionUnfavorited,
 		},
 		20,
 	)

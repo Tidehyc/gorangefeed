@@ -116,6 +116,26 @@ func TestHotScoreConsumer_HandleEngagementEvent_Scoring(t *testing.T) {
 	if mockStore.scores[videoID] != 2.5 {
 		t.Fatalf("expected score 2.5 after delete comment, got %f", mockStore.scores[videoID])
 	}
+
+	// 7. Favorite event: +9.0 (3x like weight, Total: 11.5)
+	favPayload, _ := json.Marshal(EngagementPayload{VideoID: videoID})
+	err = consumer.HandleEngagementEvent(ctx, "ev_fav_1", rabbitmq.RoutingKeyInteractionFavorited, favPayload)
+	if err != nil {
+		t.Fatalf("HandleEngagementEvent favorited failed: %v", err)
+	}
+	if mockStore.scores[videoID] != 11.5 {
+		t.Fatalf("expected score 11.5 after favorite, got %f", mockStore.scores[videoID])
+	}
+
+	// 8. Unfavorite event: -9.0 (Total: 2.5)
+	unfavPayload, _ := json.Marshal(EngagementPayload{VideoID: videoID})
+	err = consumer.HandleEngagementEvent(ctx, "ev_unfav_1", rabbitmq.RoutingKeyInteractionUnfavorited, unfavPayload)
+	if err != nil {
+		t.Fatalf("HandleEngagementEvent unfavorited failed: %v", err)
+	}
+	if mockStore.scores[videoID] != 2.5 {
+		t.Fatalf("expected score 2.5 after unfavorite, got %f", mockStore.scores[videoID])
+	}
 }
 
 func TestHotScoreConsumer_Deduplication(t *testing.T) {

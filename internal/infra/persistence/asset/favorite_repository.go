@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	domainasset "github.com/Tidehyc/gorangefeed/internal/domain/asset"
+	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
+	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -172,7 +174,7 @@ func (r *favoriteRepository) DeleteFolder(ctx context.Context, userID, folderID 
 	})
 }
 
-func (r *favoriteRepository) AddItem(ctx context.Context, item *domainasset.FavoriteItem) (bool, error) {
+func (r *favoriteRepository) AddItem(ctx context.Context, item *domainasset.FavoriteItem, outboxEvent *domainoutbox.Event) (bool, error) {
 	if item == nil {
 		return false, errors.New("favorite item cannot be nil")
 	}
@@ -220,13 +222,20 @@ func (r *favoriteRepository) AddItem(ctx context.Context, item *domainasset.Favo
 			return fmt.Errorf("increment video favorite_count error: %w", err)
 		}
 
+		// Persist outbox event if provided
+		if outboxEvent != nil {
+			if err := persistenceoutbox.SaveEventInTx(ctx, tx, outboxEvent); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
 
 	return inserted, err
 }
 
-func (r *favoriteRepository) RemoveItem(ctx context.Context, favoriteID, videoID int64) (bool, error) {
+func (r *favoriteRepository) RemoveItem(ctx context.Context, favoriteID, videoID int64, outboxEvent *domainoutbox.Event) (bool, error) {
 	if favoriteID <= 0 {
 		return false, domainasset.ErrInvalidFolderID
 	}
@@ -257,6 +266,13 @@ func (r *favoriteRepository) RemoveItem(ctx context.Context, favoriteID, videoID
 		// Atomically decrement video_stats.favorite_count
 		if err := tx.Exec("UPDATE video_stats SET favorite_count = GREATEST(favorite_count - 1, 0) WHERE video_id = ?", videoID).Error; err != nil {
 			return fmt.Errorf("decrement video favorite_count error: %w", err)
+		}
+
+		// Persist outbox event if provided
+		if outboxEvent != nil {
+			if err := persistenceoutbox.SaveEventInTx(ctx, tx, outboxEvent); err != nil {
+				return err
+			}
 		}
 
 		return nil
