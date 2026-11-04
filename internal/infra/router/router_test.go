@@ -181,3 +181,34 @@ func TestRouter_MediaRangeStreaming(t *testing.T) {
 		}
 	})
 }
+
+func TestRouter_WebRoutes(t *testing.T) {
+	tempDir := t.TempDir()
+	indexFile := filepath.Join(tempDir, "index.html")
+	_ = os.WriteFile(indexFile, []byte("<!DOCTYPE html><html><body><h1>GoRangeFeed Web</h1></body></html>"), 0644)
+
+	deps := DependencyChecks{}
+	r := NewRouter(deps)
+	MountWebRoutes(r, tempDir)
+
+	// Test GET /
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "GoRangeFeed Web") {
+		t.Fatalf("expected body to contain 'GoRangeFeed Web', got %s", w.Body.String())
+	}
+
+	// Test GET /web/ (or /web/index.html redirects to canonical /web/)
+	req2 := httptest.NewRequest(http.MethodGet, "/web/", nil)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for GET /web/, got %d", w2.Code)
+	}
+}

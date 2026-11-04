@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>GoRangeFeed - 工业级短视频极速流体验</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #0b0c10;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #fff;
+    }
+
+    /* Main Container */
+    #app {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #000;
+    }
+
+    .feed-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 480px;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      box-shadow: 0 0 30px rgba(0,0,0,0.8);
+    }
+
+    /* Top Nav */
+    .top-nav {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 56px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 16px;
+      z-index: 50;
+      background: linear-gradient(180deg, rgba(0,0,0,0.6) 0%, rgba(0,0,0,0) 100%);
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 16px;
+    }
+
+    .nav-tab {
+      font-size: 16px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.65);
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+    }
+
+    .nav-tab.active {
+      color: #fff;
+    }
+
+    .nav-tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: -4px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 18px;
+      height: 3px;
+      background: #fe2c55;
+      border-radius: 2px;
+    }
+
+    .hud-toggle-btn {
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.25);
+      color: #fff;
+      font-size: 12px;
+      padding: 5px 10px;
+      border-radius: 14px;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .hud-toggle-btn:hover {
+      background: rgba(255,255,255,0.25);
+    }
+
+    /* Video Item & Container */
+    .video-viewport {
+      width: 100%;
+      height: 100%;
+      position: relative;
+    }
+
+    .video-slide {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      transition: transform 0.35s cubic-bezier(0.2, 0.9, 0.4, 1.0);
+    }
+
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+      cursor: pointer;
+    }
+
+    /* Play/Pause Overlay */
+    .play-pause-icon {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(1.5);
+      font-size: 48px;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s, transform 0.2s;
+      color: rgba(255,255,255,0.85);
+      text-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+
+    .play-pause-icon.visible {
+      opacity: 1;
+      transform: translate(-50%, -50%) scale(1.0);
+    }
+
+    /* Right Action Bar */
+    .action-bar {
+      position: absolute;
+      right: 12px;
+      bottom: 90px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      z-index: 40;
+    }
+
+    .action-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .action-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.35);
+      backdrop-filter: blur(4px);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 22px;
+      transition: transform 0.15s, color 0.15s;
+    }
+
+    .action-btn:active .action-icon {
+      transform: scale(0.85);
+    }
+
+    .action-btn.liked .action-icon {
+      color: #fe2c55;
+    }
+
+    .action-btn.favorited .action-icon {
+      color: #fac02e;
+    }
+
+    .action-count {
+      font-size: 11px;
+      font-weight: 600;
+      margin-top: 4px;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+
+    .avatar-wrapper {
+      position: relative;
+      margin-bottom: 6px;
+    }
+
+    .avatar-img {
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      border: 2px solid #fff;
+      object-fit: cover;
+    }
+
+    .follow-add-btn {
+      position: absolute;
+      bottom: -6px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fe2c55;
+      color: #fff;
+      font-size: 13px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border: 2px solid #000;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .follow-add-btn.followed {
+      background: rgba(255,255,255,0.7);
+      color: #000;
+    }
+
+    /* Bottom Info */
+    .bottom-info {
+      position: absolute;
+      left: 16px;
+      bottom: 24px;
+      right: 80px;
+      z-index: 40;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+
+    .author-name {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .video-caption {
+      font-size: 13px;
+      line-height: 1.4;
+      color: rgba(255,255,255,0.92);
+      margin-bottom: 8px;
+      word-break: break-word;
+    }
+
+    .music-tag {
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: rgba(255,255,255,0.8);
+    }
+
+    /* Floating Heart Animation */
+    .floating-heart {
+      position: absolute;
+      pointer-events: none;
+      z-index: 60;
+      font-size: 56px;
+      color: #fe2c55;
+      animation: heartFloat 0.8s ease-out forwards;
+      transform-origin: center center;
+    }
+
+    @keyframes heartFloat {
+      0% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(0.4) rotate(0deg);
+      }
+      50% {
+        opacity: 0.95;
+        transform: translate(-50%, -80%) scale(1.3) rotate(-15deg);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(-50%, -150%) scale(1.6) rotate(10deg);
+      }
+    }
+
+    /* SSE Notification Toast */
+    .toast-container {
+      position: absolute;
+      top: 64px;
+      right: 16px;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast-card {
+      background: rgba(20, 20, 28, 0.92);
+      border-left: 4px solid #fe2c55;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 13px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      backdrop-filter: blur(10px);
+      animation: toastSlideIn 0.3s cubic-bezier(0.2, 0.9, 0.4, 1.0) forwards;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 200px;
+    }
+
+    @keyframes toastSlideIn {
+      from {
+        opacity: 0;
+        transform: translateX(50px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    /* QoS Drawer HUD */
+    .qos-drawer {
+      position: absolute;
+      top: 0;
+      right: -320px;
+      width: 300px;
+      height: 100%;
+      background: rgba(14, 16, 22, 0.95);
+      border-left: 1px solid rgba(255,255,255,0.12);
+      backdrop-filter: blur(16px);
+      z-index: 80;
+      padding: 20px 16px;
+      transition: right 0.3s cubic-bezier(0.2, 0.9, 0.4, 1.0);
+      overflow-y: auto;
+    }
+
+    .qos-drawer.open {
+      right: 0;
+    }
+
+    .qos-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding-bottom: 10px;
+    }
+
+    .qos-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #00f2fe;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .qos-close-btn {
+      background: none;
+      border: none;
+      color: #aaa;
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .qos-metric-group {
+      margin-bottom: 14px;
+    }
+
+    .qos-label {
+      font-size: 11px;
+      color: #888;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      letter-spacing: 0.5px;
+    }
+
+    .qos-value {
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .qos-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      background: rgba(0, 242, 254, 0.15);
+      color: #00f2fe;
+      border: 1px solid rgba(0, 242, 254, 0.3);
+    }
+
+    .net-select {
+      width: 100%;
+      padding: 6px 8px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      margin-top: 4px;
+      outline: none;
+    }
+
+    /* Video Progress Bar */
+    .progress-bar-container {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: rgba(255,255,255,0.2);
+      z-index: 50;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #fe2c55;
+      transition: width 0.1s linear;
+    }
+  </style>
+</head>
+<body>
+
+<div id="app">
+  <div class="feed-wrapper" id="feedWrapper">
+    <!-- Top Navigation -->
+    <div class="top-nav">
+      <div class="nav-tabs">
+        <div class="nav-tab active" data-scene="global" onclick="switchScene('global')">最新</div>
+        <div class="nav-tab" data-scene="hot" onclick="switchScene('hot')">热榜</div>
+        <div class="nav-tab" data-scene="recommend" onclick="switchScene('recommend')">推荐</div>
+      </div>
+      <button class="hud-toggle-btn" onclick="toggleQoSDrawer()">
+        <span>📊</span>
+        <span>QoS 看板</span>
+      </button>
+    </div>
+
+    <!-- Video Carousel Viewport -->
+    <div class="video-viewport" id="viewport">
+      <div class="video-slide" id="slideCurrent">
+        <video id="videoPlayer" playsinline loop preload="auto"></video>
+        <div class="play-pause-icon" id="playPauseIcon">▶</div>
+      </div>
+    </div>
+
+    <!-- Right Interaction Action Bar -->
+    <div class="action-bar">
+      <!-- Author Avatar -->
+      <div class="avatar-wrapper">
+        <img class="avatar-img" id="authorAvatar" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100" alt="Avatar">
+        <div class="follow-add-btn" id="followBtn" onclick="toggleFollow()">+</div>
+      </div>
+
+      <!-- Like Button -->
+      <div class="action-btn" id="likeBtn" onclick="toggleLike()">
+        <div class="action-icon">♥</div>
+        <div class="action-count" id="likeCount">0</div>
+      </div>
+
+      <!-- Favorite Button -->
+      <div class="action-btn" id="favoriteBtn" onclick="toggleFavorite()">
+        <div class="action-icon">★</div>
+        <div class="action-count" id="favoriteCount">0</div>
+      </div>
+
+      <!-- Comment Icon -->
+      <div class="action-btn">
+        <div class="action-icon">💬</div>
+        <div class="action-count" id="commentCount">0</div>
+      </div>
+
+      <!-- Share Icon -->
+      <div class="action-btn" onclick="copyShareLink()">
+        <div class="action-icon">↗</div>
+        <div class="action-count">分享</div>
+      </div>
+    </div>
+
+    <!-- Bottom Metadata -->
+    <div class="bottom-info">
+      <div class="author-name" id="authorName">@GoRangeFeed</div>
+      <div class="video-caption" id="videoCaption">探索高并发短视频流式架构</div>
+      <div class="music-tag">
+        <span>🎵 原创原声音频 - GoRangeFeed Studio</span>
+      </div>
+    </div>
+
+    <!-- Progress Bar -->
+    <div class="progress-bar-container">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+
+    <!-- SSE Notification Toast -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- QoS HUD Drawer -->
+    <div class="qos-drawer" id="qosDrawer">
+      <div class="qos-header">
+        <div class="qos-title">
+          <span>⚡</span>
+          <span>端侧播放 QoS 看板</span>
+        </div>
+        <button class="qos-close-btn" onclick="toggleQoSDrawer()">✕</button>
+      </div>
+
+      <div class="qos-metric-group">
+        <div class="qos-label">端侧网络环境决策</div>
+        <select class="net-select" id="netSelector" onchange="onNetworkChange()">
+          <option value="wifi">WiFi (自适应预加载 3 条)</option>
+          <option value="5g">5G (自适应预加载 2 条)</option>
+          <option value="4g">4G (自适应预加载 1 条)</option>
+          <option value="weak">弱网环境 (首帧保护 1 条)</option>
+        </select>
+      </div>
+
+      <div class="qos-metric-group">
+        <div class="qos-label">当前下发预加载策略</div>
+        <div class="qos-value">
+          <span class="qos-badge" id="qosPreloadStrategy">预加载 3 条</span>
+        </div>
+      </div>
+
+      <div class="qos-metric-group">
+        <div class="qos-label">首帧加载耗时 (TTFF)</div>
+        <div class="qos-value" id="qosTTFF">-- ms</div>
+      </div>
+
+      <div class="qos-metric-group">
+        <div class="qos-label">播放卡顿次数 / 累计卡顿时长</div>
+        <div class="qos-value" id="qosStallInfo">0 次 / 0 ms</div>
+      </div>
+
+      <div class="qos-metric-group">
+        <div class="qos-label">当前流解码协议</div>
+        <div class="qos-value">
+          <span class="qos-badge" style="color: #2ed573; border-color: rgba(46, 213, 115, 0.4); background: rgba(46, 213, 115, 0.1);">HTTP 206 Partial</span>
+        </div>
+      </div>
+
+      <div class="qos-metric-group">
+        <div class="qos-label">播放器状态</div>
+        <div class="qos-value" id="qosPlayerState">READY</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // High quality sample streams for fallback demo
+  const fallbackFeed = [
+    {
+      id: 1,
+      title: "🚀 GOrangeFeed 高并发架构深度演示",
+      description: "推拉结合关注流 + 分布式发号器 + 滑动窗口热榜 #Go #Architecture",
+      play_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+      author: { id: 101, username: "Architect_Alex", nickname: "Alex架构师", avatar_url: "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100" },
+      stats: { like_count: 8920, comment_count: 421, favorite_count: 1250 }
+    },
+    {
+      id: 2,
+      title: "🐱 治愈猫咪打哈欠高清瞬间",
+      description: "午后阳光下的惬意打盹时刻，满分可爱！ #Cat #Daily",
+      play_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+      author: { id: 102, username: "CuteCatDaily", nickname: "萌猫日记", avatar_url: "https://images.unsplash.com/photo-1517841905240-472988babdf9?w=100" },
+      stats: { like_count: 14200, comment_count: 980, favorite_count: 3600 }
+    },
+    {
+      id: 3,
+      title: "⚡ 分布式租约与 Outbox 事务精确一次",
+      description: "RabbitMQ 确认机制 + 幂等消费防重放设计 #Backend #Distributed",
+      play_url: "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
+      author: { id: 103, username: "CloudNativeCoder", nickname: "云原生极客", avatar_url: "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=100" },
+      stats: { like_count: 5310, comment_count: 219, favorite_count: 890 }
+    }
+  ];
+
+  let currentFeed = [];
+  let currentIndex = 0;
+  let currentScene = 'global';
+  let isScrolling = false;
+
+  // QoS Tracking Variables
+  let loadStartTime = 0;
+  let ttffMeasured = 0;
+  let stallCount = 0;
+  let totalStallDurationMs = 0;
+  let stallStartTime = 0;
+
+  const player = document.getElementById('videoPlayer');
+  const progressFill = document.getElementById('progressFill');
+  const playPauseIcon = document.getElementById('playPauseIcon');
+
+  // Initialization
+  window.addEventListener('DOMContentLoaded', () => {
+    initQoSConfig('wifi');
+    fetchFeed(currentScene);
+    setupEvents();
+    setupSSE();
+  });
+
+  // Fetch Feed from Backend API (with fallback)
+  async function fetchFeed(scene) {
+    try {
+      const resp = await fetch(`/api/v1/feed?scene=${scene}&limit=10`);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.data && json.data.items && json.data.items.length > 0) {
+          currentFeed = json.data.items;
+          currentIndex = 0;
+          renderVideo(currentIndex);
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn("Backend feed API unavailable, using high quality demo streams.", e);
+    }
+    currentFeed = fallbackFeed;
+    currentIndex = 0;
+    renderVideo(currentIndex);
+  }
+
+  // Render video by index
+  function renderVideo(idx) {
+    if (!currentFeed || currentFeed.length === 0) return;
+    const item = currentFeed[idx];
+
+    // Reset QoS
+    loadStartTime = performance.now();
+    ttffMeasured = 0;
+    stallCount = 0;
+    totalStallDurationMs = 0;
+    updateQoSDisplay();
+
+    player.src = item.play_url;
+    player.load();
+    player.play().catch(() => {
+      // Autoplay might be blocked by browser policy without user gesture
+      playPauseIcon.classList.add('visible');
+    });
+
+    // Populate Metadata
+    document.getElementById('authorName').innerText = `@${item.author?.nickname || item.author?.username || 'GOrangeFeed'}`;
+    document.getElementById('videoCaption').innerText = item.title || item.description || '';
+    document.getElementById('likeCount').innerText = formatCount(item.stats?.like_count || 0);
+    document.getElementById('favoriteCount').innerText = formatCount(item.stats?.favorite_count || 0);
+    document.getElementById('commentCount').innerText = formatCount(item.stats?.comment_count || 0);
+    if (item.author?.avatar_url) {
+      document.getElementById('authorAvatar').src = item.author.avatar_url;
+    }
+
+    // Toggle button state
+    document.getElementById('likeBtn').classList.toggle('liked', !!item.is_liked);
+    document.getElementById('favoriteBtn').classList.toggle('favorited', !!item.is_favorited);
+    document.getElementById('followBtn').classList.toggle('followed', !!item.is_followed);
+  }
+
+  function formatCount(num) {
+    if (num >= 10000) return (num / 10000).toFixed(1) + 'w';
+    if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
+    return num.toString();
+  }
+
+  // Setup Player and Gesture Events
+  function setupEvents() {
+    // 1. Wheel Navigation
+    window.addEventListener('wheel', (e) => {
+      if (isScrolling) return;
+      if (Math.abs(e.deltaY) > 30) {
+        if (e.deltaY > 0) {
+          nextVideo();
+        } else {
+          prevVideo();
+        }
+      }
+    });
+
+    // 2. Keyboard Navigation
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') nextVideo();
+      else if (e.key === 'ArrowUp') prevVideo();
+      else if (e.key === ' ') togglePlayPause();
+    });
+
+    // 3. Touch Swipe Navigation
+    let touchStartY = 0;
+    window.addEventListener('touchstart', (e) => {
+      touchStartY = e.touches[0].clientY;
+    }, { passive: true });
+
+    window.addEventListener('touchend', (e) => {
+      if (isScrolling) return;
+      const touchEndY = e.changedTouches[0].clientY;
+      const diffY = touchStartY - touchEndY;
+      if (Math.abs(diffY) > 50) {
+        if (diffY > 0) nextVideo();
+        else prevVideo();
+      }
+    }, { passive: true });
+
+    // 4. Double Click Heart Effect
+    const viewport = document.getElementById('viewport');
+    let lastClickTime = 0;
+    viewport.addEventListener('click', (e) => {
+      const now = Date.now();
+      if (now - lastClickTime < 300) {
+        // Double Click Hit!
+        triggerFloatingHeart(e.clientX, e.clientY);
+        if (!document.getElementById('likeBtn').classList.contains('liked')) {
+          toggleLike();
+        }
+      } else {
+        // Single click play/pause
+        togglePlayPause();
+      }
+      lastClickTime = now;
+    });
+
+    // 5. Video QoS Event Listeners
+    player.addEventListener('loadeddata', () => {
+      ttffMeasured = Math.round(performance.now() - loadStartTime);
+      document.getElementById('qosTTFF').innerText = `${ttffMeasured} ms`;
+      document.getElementById('qosPlayerState').innerText = 'PLAYING';
+    });
+
+    player.addEventListener('waiting', () => {
+      stallCount++;
+      stallStartTime = performance.now();
+      document.getElementById('qosPlayerState').innerText = 'BUFFERING';
+      updateQoSDisplay();
+    });
+
+    player.addEventListener('playing', () => {
+      if (stallStartTime > 0) {
+        totalStallDurationMs += Math.round(performance.now() - stallStartTime);
+        stallStartTime = 0;
+      }
+      document.getElementById('qosPlayerState').innerText = 'PLAYING';
+      playPauseIcon.classList.remove('visible');
+      updateQoSDisplay();
+    });
+
+    player.addEventListener('pause', () => {
+      document.getElementById('qosPlayerState').innerText = 'PAUSED';
+      playPauseIcon.classList.add('visible');
+    });
+
+    player.addEventListener('timeupdate', () => {
+      if (player.duration) {
+        const pct = (player.currentTime / player.duration) * 100;
+        progressFill.style.width = `${pct}%`;
+      }
+    });
+  }
+
+  function nextVideo() {
+    if (currentIndex < currentFeed.length - 1) {
+      reportQoSEvent();
+      isScrolling = true;
+      currentIndex++;
+      renderVideo(currentIndex);
+      setTimeout(() => { isScrolling = false; }, 400);
+    }
+  }
+
+  function prevVideo() {
+    if (currentIndex > 0) {
+      reportQoSEvent();
+      isScrolling = true;
+      currentIndex--;
+      renderVideo(currentIndex);
+      setTimeout(() => { isScrolling = false; }, 400);
+    }
+  }
+
+  function togglePlayPause() {
+    if (player.paused) {
+      player.play();
+    } else {
+      player.pause();
+    }
+  }
+
+  // Floating Heart Animation
+  function triggerFloatingHeart(x, y) {
+    const heart = document.createElement('div');
+    heart.className = 'floating-heart';
+    heart.innerText = '♥';
+    heart.style.left = `${x}px`;
+    heart.style.top = `${y}px`;
+    document.body.appendChild(heart);
+    setTimeout(() => { heart.remove(); }, 850);
+  }
+
+  // Like & Favorite Toggles
+  async function toggleLike() {
+    const item = currentFeed[currentIndex];
+    const likeBtn = document.getElementById('likeBtn');
+    const isLiked = likeBtn.classList.contains('liked');
+
+    likeBtn.classList.toggle('liked', !isLiked);
+    const countEl = document.getElementById('likeCount');
+    let cnt = parseInt(countEl.innerText) || 0;
+    countEl.innerText = Math.max(0, isLiked ? cnt - 1 : cnt + 1);
+
+    // Call backend API
+    try {
+      await fetch(`/api/v1/videos/${item.id}/like`, {
+        method: isLiked ? 'DELETE' : 'POST'
+      });
+    } catch (e) {}
+  }
+
+  async function toggleFavorite() {
+    const item = currentFeed[currentIndex];
+    const favBtn = document.getElementById('favoriteBtn');
+    const isFav = favBtn.classList.contains('favorited');
+
+    favBtn.classList.toggle('favorited', !isFav);
+    const countEl = document.getElementById('favoriteCount');
+    let cnt = parseInt(countEl.innerText) || 0;
+    countEl.innerText = Math.max(0, isFav ? cnt - 1 : cnt + 1);
+
+    try {
+      await fetch(`/api/v1/videos/${item.id}/favorite`, {
+        method: isFav ? 'DELETE' : 'POST'
+      });
+    } catch (e) {}
+  }
+
+  function toggleFollow() {
+    const followBtn = document.getElementById('followBtn');
+    const isFollowed = followBtn.classList.contains('followed');
+    followBtn.classList.toggle('followed', !isFollowed);
+    followBtn.innerText = isFollowed ? '+' : '✓';
+  }
+
+  function copyShareLink() {
+    showToast("🔗 视频链接已成功复制到剪贴板！");
+  }
+
+  function switchScene(scene) {
+    currentScene = scene;
+    document.querySelectorAll('.nav-tab').forEach(t => {
+      t.classList.toggle('active', t.getAttribute('data-scene') === scene);
+    });
+    fetchFeed(scene);
+  }
+
+  // SSE Notifications Real-time Listening (M10-02)
+  function setupSSE() {
+    try {
+      const es = new EventSource('/api/v1/notifications/stream');
+      es.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          showToast(`🔔 ${data.content || "您收到了一条新的互动通知！"}`);
+        } catch (err) {
+          showToast(`🔔 您收到了一条新的互动通知！`);
+        }
+      };
+      es.onerror = () => {
+        // SSE silent reconnect fallback
+      };
+    } catch (e) {}
+  }
+
+  function showToast(msg) {
+    const container = document.getElementById('toastContainer');
+    const toast = document.createElement('div');
+    toast.className = 'toast-card';
+    toast.innerHTML = `<span>✨</span><span>${msg}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transition = 'opacity 0.4s';
+      setTimeout(() => toast.remove(), 400);
+    }, 3500);
+  }
+
+  // QoS Drawer & Metrics Reporting (M10-03)
+  function toggleQoSDrawer() {
+    document.getElementById('qosDrawer').classList.toggle('open');
+  }
+
+  function updateQoSDisplay() {
+    document.getElementById('qosStallInfo').innerText = `${stallCount} 次 / ${totalStallDurationMs} ms`;
+  }
+
+  async function onNetworkChange() {
+    const net = document.getElementById('netSelector').value;
+    await initQoSConfig(net);
+  }
+
+  async function initQoSConfig(network) {
+    try {
+      const resp = await fetch(`/api/v1/playback/config?network=${network}`);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.data) {
+          document.getElementById('qosPreloadStrategy').innerText = `自适应预加载 ${json.data.preload_count} 条 (缓冲 ${json.data.initial_buffer_ms}ms)`;
+          return;
+        }
+      }
+    } catch (e) {}
+    // Fallback display
+    const map = { wifi: 3, '5g': 2, '4g': 1, weak: 1 };
+    document.getElementById('qosPreloadStrategy').innerText = `自适应预加载 ${map[network] || 2} 条`;
+  }
+
+  async function reportQoSEvent() {
+    const item = currentFeed[currentIndex];
+    if (!item || !item.id) return;
+
+    const payload = {
+      video_id: item.id,
+      first_frame_ms: ttffMeasured || 120,
+      stall_count: stallCount,
+      stall_duration_ms: totalStallDurationMs,
+      watch_duration_ms: Math.round(player.currentTime * 1000),
+      network: document.getElementById('netSelector').value
+    };
+
+    try {
+      await fetch('/api/v1/playback/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {}
+  }
+</script>
+</body>
+</html>

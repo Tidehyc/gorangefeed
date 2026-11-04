@@ -106,3 +106,12 @@ func MountMediaRoutes(r *gin.Engine, mediaDir string) {
 	}
 	r.Static("/media", mediaDir)
 }
+
+// MountWebRoutes mounts the web UI frontend to / and /web.
+func MountWebRoutes(r *gin.Engine, webDir string) {
+	if webDir == "" {
+		webDir = "web"
+	}
+	r.Static("/web", webDir)
+	r.StaticFile("/", webDir+"/index.html")
+}

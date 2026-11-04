@@ -248,6 +248,7 @@ func main() {
 
 	// Mount media static route and domain routes
 	router.MountMediaRoutes(engine, avatarStorage.BaseDir())
+	router.MountWebRoutes(engine, "web")
 	httpaccount.RegisterRoutes(engine, accountHandler, jwtMgr, tokenStore, rdb)
 	httpvideo.RegisterRoutes(engine, videoHandler, jwtMgr, tokenStore, rdb)
 	httpupload.RegisterRoutes(engine, uploadHandler, jwtMgr, tokenStore, rdb)
