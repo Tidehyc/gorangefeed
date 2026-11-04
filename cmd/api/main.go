@@ -13,6 +13,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpasset "github.com/Tidehyc/gorangefeed/internal/http/asset"
 	httpcreator "github.com/Tidehyc/gorangefeed/internal/http/creator"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
 	httpinteraction "github.com/Tidehyc/gorangefeed/internal/http/interaction"
@@ -26,6 +27,7 @@ import (
 	"github.com/Tidehyc/gorangefeed/internal/infra/logger"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
 	persistenceaccount "github.com/Tidehyc/gorangefeed/internal/infra/persistence/account"
+	persistenceasset "github.com/Tidehyc/gorangefeed/internal/infra/persistence/asset"
 	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
 	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
@@ -39,6 +41,7 @@ import (
 	infrascheduler "github.com/Tidehyc/gorangefeed/internal/infra/scheduler"
 	"github.com/Tidehyc/gorangefeed/internal/infra/storage"
 	serviceaccount "github.com/Tidehyc/gorangefeed/internal/service/account"
+	serviceasset "github.com/Tidehyc/gorangefeed/internal/service/asset"
 	servicecreator "github.com/Tidehyc/gorangefeed/internal/service/creator"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
@@ -190,6 +193,16 @@ func main() {
 	creatorSvc := servicecreator.NewService(draftRepo, taskRepo, videoRepo, seqGen, delayedScheduler, feedSvc)
 	creatorHandler := httpcreator.NewHandler(creatorSvc)
 
+	// 8.8 Assemble User Asset Center Domain (Favorites & Watch History)
+	favoriteRepo := persistenceasset.NewFavoriteRepository(db)
+	historyRepo := persistenceasset.NewHistoryRepository(db, rdb)
+	assetSvc, err := serviceasset.NewService(favoriteRepo, historyRepo, videoRepo)
+	if err != nil {
+		l.Error("failed to initialize asset service", "error", err)
+		os.Exit(1)
+	}
+	assetHandler := httpasset.NewHandler(assetSvc)
+
 	// Hook into video publishing to allocate monotonic publish_seq and append to timeline
 	videoHandler.AddPublishHook(func(ctx context.Context, videoID int64) {
 		seq, err := seqGen.NextPublishSeq(ctx)
@@ -229,6 +242,7 @@ func main() {
 	httpnotification.RegisterRoutes(engine, notifHandler, jwtMgr, tokenStore, rdb)
 	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
 	httpcreator.RegisterRoutes(engine, creatorHandler, jwtMgr, tokenStore, rdb)
+	httpasset.RegisterRoutes(engine, assetHandler, jwtMgr, tokenStore, rdb)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

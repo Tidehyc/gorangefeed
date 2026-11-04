@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **二期架构演进进行中：M8 资产中心服务编排与热榜加权落地（M8-01~M8-04 完成，准备推进 M8-05）** |
-| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 8 / 8 项（100%） · M8 阶段 4 / 6 项（66.7%） · M9~M10 规划中 |
-| **进行中任务** | M8 资产中心 HTTP 控制器与全路由依赖装配 (M8-05) |
+| **当前阶段** | **二期架构演进进行中：M8 资产中心 HTTP 控制器与路由装配落地（M8-01~M8-05 完成，准备推进 M8-06）** |
+| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 8 / 8 项（100%） · M8 阶段 5 / 6 项（83.3%） · M9~M10 规划中 |
+| **进行中任务** | M8 资产中心全生命周期 E2E 集成测试 (M8-06) |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M8-05：在 internal/http/asset 暴露收藏、收藏夹与播放历史路由并注册至 cmd/api/main.go |
+| **下一步行动** | 推进 M8-06：编写 test/e2e/asset_lifecycle_test.go 验证收藏流转、多收藏夹分类、断点续播与热榜赋能全链路验收 |
 
 
 
@@ -232,7 +232,7 @@
 | **M8-02** | 收藏与历史领域模型与仓储契约定义 | — | 在 `internal/domain/asset` 定义 `FavoriteFolder` 聚合根、`FavoriteItem`、`WatchHistory` 实体、滑动窗口保留策略值对象与仓储契约；单元测试覆盖 | `DONE` |
 | **M8-03** | 收藏夹与播放历史持久化仓储实现 | M8-01, M8-02 | 在 `internal/infra/persistence/asset` 实现仓储；基于 Redis ZSet 实现单个用户最近 100 条播放历史毫秒级滑动维护，异步落库 MySQL；实现默认收藏夹自动初始化与多收藏夹归类；原子同步自增/自减 `video_stats.favorite_count` | `DONE` |
 | **M8-04** | 资产中心服务编排与热度推荐正向加权 | M8-03, M4.5 | 在 `internal/service/asset` 实现业务服务：收藏/取消收藏、历史进度记录与断点续播查询；触发 `interaction.favorited` 事件，在热榜滑动分钟桶给予 3 倍于点赞的高权重热度赋能；单元测试覆盖 | `DONE` |
-| **M8-05** | 资产中心 HTTP 控制器与全路由挂载 | M8-04 | 在 `internal/http/asset` 暴露 `POST/DELETE /api/v1/videos/:id/favorite`、`GET/POST/DELETE /api/v1/user/favorites`、`GET /api/v1/user/history`；全依赖组装与路由注册；Handler 单测 | `TODO` |
+| **M8-05** | 资产中心 HTTP 控制器与全路由挂载 | M8-04 | 在 `internal/http/asset` 暴露 `POST/DELETE /api/v1/videos/:id/favorite`、`GET/POST/DELETE /api/v1/user/favorites`、`GET /api/v1/user/history`；全依赖组装与路由注册；Handler 单测 | `DONE` |
 | **M8-06** | M8 资产中心全生命周期 E2E 集成测试 | M8-05 | 在 `test/e2e/asset_lifecycle_test.go` 中验证黑盒测试：收藏与取消收藏原子计数流转 → 默认收藏夹与自定义收藏夹分类管理 → 跨设备断点续播进度保存与历史滑动窗口修剪 → 收藏行为驱动热榜热度倍增与推荐流正向加权断言 → `make vet && make test` 全量绿灯回归 | `TODO` |
 
 ---
