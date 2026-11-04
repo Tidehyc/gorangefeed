@@ -428,3 +428,120 @@ sequenceDiagram
 | **E2E-M7-06** | 分布式发号器 `publish_seq` 单调递增断言 | 模拟 50 个视频并发触发发布 | 所有发布的视频其 `publish_seq` 严格连续单调递增，无重复，无逆序 |
 | **E2E-M7-07** | 乱序提交下的时间线无漏翻页验证 | 故意使早生成的草稿在后时刻发布；客户端拉取全局流 | 依据 `publish_seq` 游标拉取，后发布的草稿准确出现在时间线最顶端，不会因主键 ID 较小被漏掉 |
 | **E2E-M7-08** | 并发 Worker 抢占式调度幂等防重复发布 | 2 个并发 Worker 同时扫描同一个到期的定时发布任务 | 基于 Redis 分布式锁与 MySQL 状态 CAS 校验，确保该任务仅被调度执行一次，绝不产生双重视频条目 |
+
+---
+
+### 6.5 M9 内容合规与安全审核中台详细架构设计
+
+#### 6.5.1 审核状态机与双轨流转引擎
+```mermaid
+stateDiagram-v2
+    [*] --> Submitted: 视频提交发布
+    Submitted --> MachineChecking: 触发敏感词机审 (AC 自动机)
+    
+    state MachineChecking {
+        [*] --> CheckWord
+        CheckWord --> Clean: 无敏感词 / 风险分=0
+        CheckWord --> LowRisk: 命中轻度词 / 风险分 (0, 60]
+        CheckWord --> HighRisk: 命中违禁词 / 风险分 > 60
+    }
+
+    Clean --> Approved: 机审直接通过 (先发后审模式)
+    LowRisk --> PendingHuman: 转人工复审队列 (标记高亮命中词)
+    HighRisk --> Rejected: 自动阻断并驳回发布
+
+    PendingHuman --> Approved: 运营人工审核通过
+    PendingHuman --> Rejected: 运营人工审核驳回
+
+    Approved --> Published: 生成 publish_seq 入全局时间线
+    Published --> Takedown: 运营事后巡检一键下架 (撤销索引/清缓存)
+    Takedown --> [*]
+    Rejected --> [*]
+```
+
+#### 6.5.2 核心接口与契约规范
+
+| 业务域 | 方法 | 路径 | 鉴权方式 | 核心入参 / Body | 成功响应核心字段 |
+|---|---|---|---|---|---|
+| **运营后台** | `GET` | `/api/v1/admin/reviews` | AdminAuth | Query: `status`, `cursor`, `limit` | `{ items: [{ task_id, video_id, risk_score, matched_words, status }], next_cursor }` |
+| | `POST` | `/api/v1/admin/videos/:id/review` | AdminAuth | `action: "approve"/"reject"`, `review_note` | `{ video_id: 1, status: "approved" }` |
+| | `POST` | `/api/v1/admin/videos/:id/takedown` | AdminAuth | `reason` | `{ video_id: 1, status: "takedown", index_revoked: true }` |
+| | `POST` | `/api/v1/admin/users/:id/ban` | AdminAuth | `duration_seconds`, `reason` | `{ user_id: 1, status: "banned", token_revoked: true }` |
+
+---
+
+## 七、架构现状反思与工业级对照分析（Architecture Reflection）
+
+在完成工程经典模式（推拉结合、分层缓存水化、游标分页、Outbox 可靠投递、滑动热榜）的基础上，客观对照抖音、快手、Twitter、TikTok 等十亿级工业系统，定位差异与技术权衡：
+
+### 7.1 六大核心维度深度剖析
+
+```mermaid
+mindmap
+  root((Feed 体系对照))
+    排序机制
+      主流: 双塔向量召回 + CTR/完播多目标模型精排 (For You)
+      本项目: 规则排序 (热门50%+最新30%+探索20% 发现页)
+    关注流规模
+      主流: 分片 Inbox + 活跃度冷热裁剪 + 离线数据湖兜底
+      本项目: 5000粉丝分界推拉结合 + Redis ZSet + MySQL 联表兜底
+    缓存与水化
+      主流: 个性化无法共享骨架, 依赖近线预排与特征缓存
+      本项目: 全局流 L1 公共骨架共享极高命中率 + 后置批量水化
+    一致性取舍
+      主流: AP 优先, 近似计数, 允许 Feed 滑动偶发微量重复/空洞
+      本项目: CP 优先, RowsAffected==1 驱动, Outbox租约精准一次, 游标无空洞
+    内容流媒体
+      主流: 上传 -> FFmpeg 多码率转码 -> HLS/DASH 自适应流 -> CDN
+      本项目: 上传 -> 本地存储 -> HTTP 206 分段直出 (M6已含QoS上报)
+    部署与算力
+      主流: Kafka + Flink 实时特征流 + 深度学习集群 + 多机房
+      本项目: 单体 API + 独立 Worker + Docker Compose (极简可跑通、可压测)
+```
+
+1. **排序机制（规则分发 vs 模型推荐）**：
+   * **现状**：当前推荐流基于“热门 50%、最新 30%、探索 20% + 曝光去重 + 同作者打散”。本质上是早期的“综合发现页”，而非机器学习驱动的“猜你喜欢（For You）”。
+   * **权衡**：规则策略计算极快、无重型特征工程依赖；但在用户长期粘性和个性化捕获上存在天花板。
+2. **关注流推拉结合（同构思路，量级差异）**：
+   * **现状**：与 Twitter、微博思路完全同源（5000 粉丝分界：普通作者写扩散进 Inbox，大 V 读扩散拉 Outbox 并归并）。
+   * **工业差异**：工业界需要对千万粉丝大 V 的百万活跃粉丝做活跃度过滤（只给 7 天活跃粉丝推流），且 Inbox 需水平分片；本项目单 Redis + MySQL 支撑千级用户验证完备，但更高量级需引入分片集群。
+3. **缓存分层与水化（公共骨架的红利与边界）**：
+   * **现状**：L1 页缓存跨全平台共享纯 ID 骨架，登录态互动态（点赞、关注）后置批量水化，命中率极高且杜绝缓存雪崩。
+   * **工业差异**：**共享骨架的成立前提是“存在全局统一客观序”**。在个性化“千人千面”流中，无法共享骨架，必须走向用户级离线/近线预刷队列与特征缓存。
+4. **一致性取舍（“较真”的 CP vs “实用”的 AP）**：
+   * **现状**：通过 `RowsAffected == 1`、Outbox 分布式租约调度、发号器单调递增保障绝对精确；
+   * **工业差异**：在大规模高并发下，主流平台对点赞和播放采用 Redis 缓冲聚合、异步批量回写 MySQL，翻页允许微量抖动。当前设计体现了严密的分布式事务控制能力，但在极高吞吐下需要 AP 降级路径。
+5. **内容媒体链路**：
+   * **现状**：单文件分片上传 + 本地存储 + HTTP 206 断点续播。
+   * **工业差异**：主流依赖完整的媒体流水线（FFmpeg 异步抽帧、WebP 封面、HLS/DASH 多码率自适应切片、CDN 边缘分发）。
+6. **规模与部署形态**：
+   * **定位**：单机全栈 Docker Compose + 高度可复现的自动化压测套件，适合作为高水准工程架构范例；主流系统则是数万台服务器支撑的大数据流批一体集群。
+
+---
+
+## 八、未来演进里程碑规划（M11~M13 架构纵深路线图）
+
+### 8.1 M11: 推荐流特征排序进阶（Mini-For-You 推荐系统）
+* **目标**：摆脱机械的 5:3:2 规则，建立“特征画像 -> 加权打分 -> 多样性重排”的两阶段推荐引擎。
+* **架构设计**：
+  1. **用户短期兴趣向量**：当用户发生点赞、完播、收藏时，异步通过 Redis Hash 记录用户的 Tag 偏好权重（如 `#美食: 1.5, #科技: 0.8`），按半衰期（如 24h）自然衰减；
+  2. **轻量在线打分层 (Scoring)**：
+     $$\text{Score} = w_1 \cdot \text{CosineSim}(\vec{V}_{\text{user}}, \vec{V}_{\text{video}}) + w_2 \cdot \text{Quality} + w_3 \cdot e^{-\lambda \Delta t} - w_4 \cdot \text{Penalty}_{\text{author}}$$
+  3. **多样性打散 (Rerank)**：采用滑动窗口与同作者惩罚，确保同一屏内不连续出现同类目、同作者视频。
+
+### 8.2 M12: 工业级内容媒体流水线（FFmpeg 异步 HLS 自适应流）
+* **目标**：补齐短视频内容链路短板，实现自动化转码与自适应码率（ABR）。
+* **架构设计**：
+  1. 上传完成后由 Worker 异步消费 `video.transcode_ready` 任务；
+  2. 拉起本地 FFmpeg 工具链：
+     * **封面抽帧**：自动提取第 1 秒高质量帧生成 WebP 封面；
+     * **HLS 切片**：生成 720p 与 1080p 多码率切片（`.m3u8` 索引与 `.ts` 分段）；
+  3. 配合 M6 的 QoS 决策器，端侧根据网络条件（4G/5G/WiFi）动态拉取对应清晰度流。
+
+### 8.3 M13: 超高并发 AP 计数削峰与异步批量回写降级
+* **目标**：演练工业界 AP 优先的抗并发模式，与现有 CP 强一致模式形成性能压测对比。
+* **架构设计**：
+  1. **Redis 计数缓冲池**：高频点赞/播放不打数据库行锁，直接通过 Redis `INCR` 缓冲；
+  2. **定时批量刷新 Worker**：每 3~5 秒聚合变更视频列表，使用 GORM 批量 `CASE WHEN` 异步回写 MySQL；
+  3. **输出 Benchmark 对比报告**：对比强一致性行锁（800 QPS 基线）与 AP 削峰架构（15,000+ QPS），用真实数据支撑架构选型答辩。
+
