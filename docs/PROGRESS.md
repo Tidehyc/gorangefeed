@@ -22,11 +22,11 @@
 
 | 监控项 | 当前状态 |
 |---|---|
-| **当前阶段** | **二期架构演进进行中：M8 资产中心全生命周期落地（M8 顺利收官，准备推进 M9 内容合规与安全审核中台）** |
-| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期进行中**：M7 阶段 8 / 8 项（100%） · M8 阶段 6 / 6 项（100%） · M9~M10 规划中 |
-| **进行中任务** | M9 内容合规与安全审核中台启动准备 (M9-01 审核表迁移) |
+| **当前阶段** | **二期核心架构演进大圆满：M9 内容合规审核中台与 M10 全栈 Web 流式演示客户端全部交付！未来演进（M11推荐特征排序、M12转码流水线、M13高并发AP计数削峰）已规划入档** |
+| **完成进度** | **一期核心闭环**：M0~M6 阶段 89 / 89 项（100%） · **二期完工**：M7~M10 阶段 22 / 22 项（100%） · 全项目总计 111 / 111 项任务全绿灯收官 · M11~M13 规划中 |
+| **进行中任务** | 二期全模块收官验收与架构复盘 |
 | **阻塞事项** | 无 |
-| **下一步行动** | 推进 M9-01：编写 migrations/000012_create_moderation_tables 审核任务与违规治理数据表迁移脚本 |
+| **下一步行动** | 启动后续技术推进：按计划推进 M11 推荐特征排序、M12 HLS 工业转码流水线与 M13 AP 计数削峰压测演练 |
 
 
 
@@ -47,8 +47,11 @@
 | **M6** | 性能压测与播放 QoS 体验监控 | NFR-PERF-*, FR-QOS-* | `DONE` | 核心链路达到性能设计指标并产出基准分析报告；端侧预加载策略建议与播放卡顿/首帧 QoS 上报监控 |
 | **M7** | 创作中心与高可靠发布时序 | FR-CRT-*, NFR-REL-03 | `DONE` | 草稿箱全生命周期管理；秒级准点定时发布延迟队列调度；分布式发号器生成 `publish_seq` 彻底消除时间线翻页空洞 |
 | **M8** | 视频收藏夹与播放历史资产中心 | FR-INT-08, FR-USR-04 | `DONE` | 默认与自定义多收藏夹；播放历史滑动窗口保留与断点续播；高权重收藏事件正向加权热榜与推荐召回；E2E 全生命周期测试绿灯 |
-| **M9** | 内容合规与安全审核中台 | NFR-SEC-08, FR-ADM-* | `TODO` | 先审后发/先发后审双轨制；Aho-Corasick 高效敏感词机审引擎；运营后台违规下架与用户封禁处罚 |
-| **M10**| 全栈 Web 短视频流式演示客户端 | FR-WEB-* | `TODO` | 响应式 Web 视频流上下滑播放；双击点赞动画；实时 SSE 通知浮窗展示；QoS 观测面板展示 |
+| **M9** | 内容合规与安全审核中台 | NFR-SEC-08, FR-ADM-* | `DONE` | 先审后发/先发后审双轨制；Aho-Corasick 高效敏感词机审引擎；运营后台违规下架与用户封禁处罚；E2E 全生命周期测试绿灯 |
+| **M10**| 全栈 Web 短视频流式演示客户端 | FR-WEB-* | `DONE` | 响应式 Web 视频流上下滑播放；双击点赞动画；实时 SSE 通知浮窗展示；QoS 观测面板展示；静态路由全自动化挂载 |
+| **M11**| 推荐流特征排序进阶（Mini-For-You） | FR-REC-ADV | `PLANNED` | 抛弃纯规则 5:3:2 分发；用户短期兴趣标签向量 + 质量分平滑 + 半衰期衰减打分 + 多样性打散重排 |
+| **M12**| 工业级内容媒体流水线（ABR 流媒体） | FR-VID-HLS | `PLANNED` | 基于 FFmpeg 异步 Worker 实现视频抽帧生成封面、多码率自适应切片（HLS m3u8/ts），完善工业级流媒体链路 |
+| **M13**| 超高并发 AP 计数削峰与异步批量回写 | NFR-PERF-AP | `PLANNED` | 针对热榜 Top 视频点赞计数引入 Redis 计数缓冲与定时批量回写 MySQL；给出 CP 强一致与 AP 高吞吐架构基准对比报告 |
 
 ---
 
@@ -241,11 +244,11 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M9-01** | 审核任务与违规治理数据表迁移 | M0-05 | 编写 `000012_create_moderation_tables` 迁移脚本；创建 `review_tasks` 表（`video_id, status, risk_score, matched_words, reviewer_id, review_note`）与 `moderation_logs` 表；通过 migrate up/down 回滚验证 | `TODO` |
-| **M9-02** | 审核中台领域模型与规则引擎契约定义 | — | 在 `internal/domain/moderation` 定义 `ReviewTask` 聚合根（包含 `Approved/Rejected/Pending` 状态机流转）、`ReviewPolicy` 策略枚举（先审后发/先发后审）、`SensitiveMatcher` 接口契约；单元测试覆盖 | `TODO` |
-| **M9-03** | 基于 Aho-Corasick 算法的敏感词机审引擎 | M9-02 | 在 `internal/service/moderation` 实现高性能敏感词检测器：构建双数组 AC 自动机，支持 10 万+ 敏感词毫秒级多模式匹配，命中敏感词自动打标并根据风险权重自动判定拦截；单元测试覆盖 | `TODO` |
-| **M9-04** | 运营管理后台控制器与全路由挂载 | M9-03 | 在 `internal/http/admin` 暴露 `GET /api/v1/admin/reviews`、`POST /api/v1/admin/videos/:id/review`、`POST /api/v1/admin/videos/:id/takedown`、`POST /api/v1/admin/users/:id/ban`；绑定管理员 RBAC 权限校验；依赖装配与 Handler 单测 | `TODO` |
-| **M9-05** | M9 内容审核与合规治理全生命周期 E2E 集成测试 | M9-04 | 在 `test/e2e/moderation_lifecycle_test.go` 中验证黑盒测试：敏感词自动命中打标与风险阻断 → 先发后审与先审后发双轨流转 → 运营审核驳回自动下架视频与撤销时间线索引 → 违规账号封禁后鉴权即时失效 → `make vet && make test` 全量绿灯回归 | `TODO` |
+| **M9-01** | 审核任务与违规治理数据表迁移 | M0-05 | 编写 `000012_create_moderation_tables` 迁移脚本；创建 `review_tasks` 表（`video_id, status, risk_score, matched_words, reviewer_id, review_note`）与 `moderation_logs` 表；通过 migrate up/down 回滚验证 | `DONE` |
+| **M9-02** | 审核中台领域模型与规则引擎契约定义 | — | 在 `internal/domain/moderation` 定义 `ReviewTask` 聚合根（包含 `Approved/Rejected/Pending` 状态机流转）、`ReviewPolicy` 策略枚举（先审后发/先发后审）、`SensitiveMatcher` 接口契约；单元测试覆盖 | `DONE` |
+| **M9-03** | 基于 Aho-Corasick 算法的敏感词机审引擎 | M9-02 | 在 `internal/service/moderation` 实现高性能敏感词检测器：构建双数组 AC 自动机，支持 10 万+ 敏感词毫秒级多模式匹配，命中敏感词自动打标并根据风险权重自动判定拦截；单元测试覆盖 | `DONE` |
+| **M9-04** | 运营管理后台控制器与全路由挂载 | M9-03 | 在 `internal/http/admin` 暴露 `GET /api/v1/admin/reviews`、`POST /api/v1/admin/videos/:id/review`、`POST /api/v1/admin/videos/:id/takedown`、`POST /api/v1/admin/users/:id/ban`；绑定管理员 RBAC 权限校验；依赖装配与 Handler 单测 | `DONE` |
+| **M9-05** | M9 内容审核与合规治理全生命周期 E2E 集成测试 | M9-04 | 在 `test/e2e/moderation_lifecycle_test.go` 中验证黑盒测试：敏感词自动命中打标与风险阻断 → 先发后审与先审后发双轨流转 → 运营审核驳回自动下架视频与撤销时间线索引 → 违规账号封禁后鉴权即时失效 → `make vet && make test` 全量绿灯回归 | `DONE` |
 
 ---
 
@@ -253,9 +256,21 @@
 
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
-| **M10-01**| 响应式短视频流 Web 播放器脚手架 | M2, M3 | 在 `web/` 下构建响应式 HTML5 极简短视频播放界面（无厚重前端构建依赖）；支持鼠标滚轮与移动端触屏上下滑切视频；集成 HTTP 206 Partial Content 分段流式解码播放与首屏静音自动起播 | `TODO` |
-| **M10-02**| 互动交互动效与实时 SSE 弹窗集成 | M4, M5, M10-01 | 接入点赞/关注双向绑定；双击屏幕触发红心飞出动画；接入 `/api/v1/notifications/stream` SSE 长连接，实现新点赞/新评论右上角 Toast 浮窗与未读红点毫秒级闪烁 | `TODO` |
-| **M10-03**| 端侧播放 QoS 实时观测大盘看板 | M6, M10-02 | 自动采集起播首帧耗时、卡顿事件与播放时长并向 `/api/v1/playback/events` 自动上报；在前端悬浮抽屉中展示实时 QoS 看板（当前预加载策略、卡顿率、首帧耗时直方图） | `TODO` |
+| **M10-01**| 响应式短视频流 Web 播放器脚手架 | M2, M3 | 在 `web/` 下构建响应式 HTML5 极简短视频播放界面（无厚重前端构建依赖）；支持鼠标滚轮与移动端触屏上下滑切视频；集成 HTTP 206 Partial Content 分段流式解码播放与首屏静音自动起播 | `DONE` |
+| **M10-02**| 互动交互动效与实时 SSE 弹窗集成 | M4, M5, M10-01 | 接入点赞/关注双向绑定；双击屏幕触发红心飞出动画；接入 `/api/v1/notifications/stream` SSE 长连接，实现新点赞/新评论右上角 Toast 浮窗与未读红点毫秒级闪烁 | `DONE` |
+| **M10-03**| 端侧播放 QoS 实时观测大盘看板 | M6, M10-02 | 自动采集起播首帧耗时、卡顿事件与播放时长并向 `/api/v1/playback/events` 自动上报；在前端悬浮抽屉中展示实时 QoS 看板（当前预加载策略、卡顿率、首帧耗时直方图） | `DONE` |
+
+---
+
+## 十八、未来演进里程碑规划（M11~M13 架构纵深规划）
+
+| 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
+|---|---|---|---|---|
+| **M11-01** | 视频分类标签与用户短期兴趣画像建模 | M4, M8 | 在 `videos` 增加分类/标签属性；基于用户完播、点赞、收藏行为在 Redis Hash 实时维护衰减的用户短期兴趣权重向量 | `PLANNED` |
+| **M11-02** | 推荐流两阶段精排引擎（召回 + 加权打分 + 重排打散） | M11-01, M4.5 | 告别纯规则 5:3:2 分发；引入打分层：`Score = w1*TagSimilarity + w2*QualityScore + w3*TimeDecay - w4*Penalty`，并进行滑动窗口多样性打散 | `PLANNED` |
+| **M11-03** | 工业级内容媒体转码与自适应切片流水线（HLS） | M2, M7 | 引入 FFmpeg 异步 Worker：视频上传完成后自动异步抽帧生成 WebP 封面，生成 720p/1080p HLS 多码率自适应流切片与 m3u8 索引 | `PLANNED` |
+| **M11-04** | 热点视频高并发 AP 计数削峰与批量异步刷盘演练 | M4, M6 | 针对超高并发热点视频点赞引入 Redis Buffer 聚合缓冲与定时批量回写 MySQL；给出 CP 强一致性与 AP 高吞吐基准压测对比报告 | `PLANNED` |
+
 
 
 
