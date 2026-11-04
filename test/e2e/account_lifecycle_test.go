@@ -14,6 +14,7 @@ import (
 	"time"
 
 	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	httpadmin "github.com/Tidehyc/gorangefeed/internal/http/admin"
 	httpasset "github.com/Tidehyc/gorangefeed/internal/http/asset"
 	httpcreator "github.com/Tidehyc/gorangefeed/internal/http/creator"
 	httpfeed "github.com/Tidehyc/gorangefeed/internal/http/feed"
@@ -27,6 +28,7 @@ import (
 	domainasset "github.com/Tidehyc/gorangefeed/internal/domain/asset"
 	domaincreator "github.com/Tidehyc/gorangefeed/internal/domain/creator"
 	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
+	domainmoderation "github.com/Tidehyc/gorangefeed/internal/domain/moderation"
 	domainnotification "github.com/Tidehyc/gorangefeed/internal/domain/notification"
 	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
@@ -39,6 +41,7 @@ import (
 	persistenceasset "github.com/Tidehyc/gorangefeed/internal/infra/persistence/asset"
 	persistencecreator "github.com/Tidehyc/gorangefeed/internal/infra/persistence/creator"
 	persistencefeed "github.com/Tidehyc/gorangefeed/internal/infra/persistence/feed"
+	persistencemoderation "github.com/Tidehyc/gorangefeed/internal/infra/persistence/moderation"
 	persistenceinteraction "github.com/Tidehyc/gorangefeed/internal/infra/persistence/interaction"
 	persistencenotification "github.com/Tidehyc/gorangefeed/internal/infra/persistence/notification"
 	persistenceoutbox "github.com/Tidehyc/gorangefeed/internal/infra/persistence/outbox"
@@ -55,6 +58,7 @@ import (
 	serviceasset "github.com/Tidehyc/gorangefeed/internal/service/asset"
 	servicecreator "github.com/Tidehyc/gorangefeed/internal/service/creator"
 	servicefeed "github.com/Tidehyc/gorangefeed/internal/service/feed"
+	servicemoderation "github.com/Tidehyc/gorangefeed/internal/service/moderation"
 	serviceinteraction "github.com/Tidehyc/gorangefeed/internal/service/interaction"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
 	serviceplayback "github.com/Tidehyc/gorangefeed/internal/service/playback"
@@ -255,6 +259,9 @@ type e2eExtendedCtx struct {
 	FavoriteRepo   domainasset.FavoriteRepository
 	HistoryRepo    domainasset.HistoryRepository
 	HotConsumer    *servicefeed.HotScoreConsumer
+	ModerationRepo domainmoderation.ReviewRepository
+	ModerationSvc  servicemoderation.Service
+	AdminHandler   *httpadmin.Handler
 }
 
 
@@ -416,6 +423,12 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 	assetHandler := httpasset.NewHandler(assetSvc)
 	httpasset.RegisterRoutes(engine, assetHandler, jwtMgr, tokenStore, rdb)
 
+	moderationRepo := persistencemoderation.NewRepository(db)
+	acMatcher := servicemoderation.NewACMatcher()
+	moderationSvc := servicemoderation.NewService(moderationRepo, acMatcher, videoRepo, timelineRepo, repo, tokenStore, nil)
+	adminHandler := httpadmin.NewHandler(moderationSvc)
+	httpadmin.RegisterRoutes(engine, adminHandler, jwtMgr, tokenStore)
+
 	deduplicator := rabbitmq.NewDeduplicator(db)
 	notifConsumer, _ := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, repo)
 	hotScoreConsumer, _ := servicefeed.NewHotScoreConsumer(hotStore, deduplicator)
@@ -467,6 +480,9 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 		FavoriteRepo:   favoriteRepo,
 		HistoryRepo:    historyRepo,
 		HotConsumer:    hotScoreConsumer,
+		ModerationRepo: moderationRepo,
+		ModerationSvc:  moderationSvc,
+		AdminHandler:   adminHandler,
 	}, cleanup
 }
 
