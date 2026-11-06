@@ -1,0 +1,88 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-900 text-mist-100 antialiased;
+    margin: 0;
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  * {
+    -webkit-touch-callout: none;
+  }
+
+  button {
+    @apply select-none;
+  }
+
+  input,
+  textarea {
+    @apply outline-none;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-500;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .feed-scroller {
+    height: 100dvh;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+    scrollbar-width: none;
+  }
+
+  .feed-scroller::-webkit-scrollbar {
+    display: none;
+  }
+
+  .feed-slide {
+    height: 100dvh;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+  }
+
+  .text-shadow-hero {
+    text-shadow: 0 1px 12px rgba(0, 0, 0, 0.65);
+  }
+
+  .glass {
+    background: rgba(14, 16, 19, 0.72);
+    backdrop-filter: blur(18px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-heart-pop,
+  .animate-slide-up,
+  .animate-fade-in {
+    animation-duration: 1ms !important;
+  }
+}
