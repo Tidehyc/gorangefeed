@@ -23,11 +23,11 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 | FIX-03 ✅ | P1 | 审核通过后时间线 score 用错量纲（videoID 当 publish_seq） | `service/moderation/service.go:144` | S |
 | FIX-04 | P1 | 消费端先标记后处理，失败即静默丢事件 | `feed/fanout.go:68`、`feed/hot_score_consumer.go:56`、`notification/consumer.go:81` | M |
 | FIX-05 ✅ | P1 | 推荐流翻页重复（page 不参与召回） | `service/feed/service.go:824-961` | S |
-| FIX-06 | P2 | UID 维度限流写好了但没接线 | `middleware/ratelimit.go:113` | S |
+| FIX-06 ✅ | P2 | UID 维度限流写好了但没接线 | `middleware/ratelimit.go:113` | S |
 | FIX-07 | P2 | 文档与实现漂移 5 处 | `README.md`、`docs/*.md` | S |
 | FIX-08 | P2 | E2E 断言缺口（M9-05 声称的验证点没测） | `test/e2e/moderation_lifecycle_test.go` | S |
 
-进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 已完成并有测试覆盖**（见文末「已完成项实录」），FIX-06/07/08 待做。
+进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 / FIX-06 已完成并有测试覆盖**（见文末「已完成项实录」），FIX-07/08 待做。
 FIX-04 未动，改动最大，建议单独一个 PR。
 
 
@@ -202,9 +202,14 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 
 **现状**：`internal/infra/middleware/ratelimit.go:113` 定义了 `UserRateLimiter`，但全仓库唯一调用点是 `ratelimit_test.go:127`；`internal/infra/router/router.go` 里 grep 不到任何 `RateLimit`。实际只有登录/注册组挂了 IP 限流（`internal/http/account/routes.go:19`，10 次/分）。
 
-**修复要点**：给写路径挂 UID 限流（发布视频、评论、点赞、上传、举报），限额参考 NFR 里的设计值；`rdb != nil` 时启用，与现有 `IPRateLimiter` 保持同一开关风格。
+**修复要点**：给写路径挂 UID 限流，限额用 NFR-SEC-07 / DESIGN.md 的设计值（点赞、评论、关注 = 30 次/分/UID）；挂在 `JWTAuth` **之后**，这样 key 是用户 ID 而不是 IP。
 
-**验收**：单测沿用 `TestRateLimiter_UserRateLimiter` 的模式；手工压同一用户评论接口，超限返回 429 且响应体走统一 `response.Fail`。
+**范围说明**：原待办里还写了「发布视频、上传、举报」，实际只做了 NFR-SEC-07 明确列出并给了数值的三类——
+发布/上传在 NFR 里**没有设计值**，举报接口**根本不存在**。自己编一个限额会变成「文档有、需求无」的新漂移，
+所以留空并在此说明，等有明确的产品口径再补。
+
+**验收**：E2E 压同一 UID 的点赞接口，第 31 次返回 429 且 `error.code == "rate_limited"`；另一用户同接口不受影响；
+限流 key 的 TTL 落在 (0, 1m]。
 
 ---
 
@@ -343,3 +348,32 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
   留作后续优化，当前不引入。
 - 池子上限 200 条：`limit=30` 时最多服务约 6 页，翻到底 `has_more` 会转 false 而不是无限深挖。
   这是有意的——推荐流不需要无限下滑，深翻页本来就应该回到重新召回（刷新）。
+
+### FIX-06 · UID 维度限流接线
+
+**根因**：`middleware.UserRateLimiter` 早就写好了（含 `uid:` 前缀回落 IP 的逻辑），但只在它自己的单测里被调用过。
+`PROGRESS.md` M1-07 写着「按 UID 限制高频操作（30 次/分）」、`DESIGN.md` 也这么写，**实现从来没接上线**。
+
+**改法**：在三个写路径组上挂 `middleware.UserRateLimiter(rdb, <action>, 30, time.Minute)`，
+一组一个桶（`like` / `comment` / `follow`），而不是共用一个桶——爱评论的用户不该被堵得点不了赞。
+
+| 文件 | 挂载点 | 桶 |
+|---|---|---|
+| `internal/http/interaction/routes.go` | `POST/DELETE /videos/:videoId/like`、`POST/DELETE /comments/:commentId/like` | `like` |
+| `internal/http/interaction/routes.go` | `POST /videos/:videoId/comments`、`DELETE /comments/:commentId` | `comment` |
+| `internal/http/relation/routes.go` | `POST/DELETE /users/:userId/follow` | `follow` |
+
+**顺序很重要**：限流器挂在 `jwtAuth` **之后**。`UserRateLimiter` 的 key 取 `middleware.GetUserID`，
+放在鉴权之前拿到的是空值，会退化成按 IP 计——那就不是「UID 维度限流」了。
+`rdb == nil` 时 `RateLimiter` 自身直接放行，所以不需要像 `account/routes.go` 那样再加 `if rdb != nil`。
+
+**测试**：`TestM4_InteractionLifecycle_EndToEnd` 新增 Phase 10：
+
+- 用一个**独立注册的探针用户**打 31 次 `POST /videos/:id/like`，断言第 **31** 次才 429（前 30 次都是 200，
+  点赞在持久层是 `ON DUPLICATE KEY UPDATE id = id`，重复点赞本身就是幂等的）；
+- 断言 429 响应体走统一 `response.Fail`，`error.code == "rate_limited"`；
+- 换另一个用户打同一接口，断言**不受影响**（证明 key 是 UID 不是 IP）；
+- 断言 Redis 键 `ratelimit:like:uid:{uid}` 的 TTL 落在 `(0, 1m]`。
+
+用独立用户而不是复用 Phase 1 里的 uidA：Phase 1-9 已经消耗了同一分钟内的点赞配额，
+复用会让「第 31 次」这个断言变成随机通过。
