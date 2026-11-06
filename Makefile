@@ -1,4 +1,4 @@
-.PHONY: all up down down-v migrate migrate-down promote-admin run worker test test-race vet build clean help
+.PHONY: all up down down-v migrate migrate-down promote-admin run worker test test-race e2e vet build clean help
 
 all: vet test build
 
@@ -44,6 +44,10 @@ test:
 test-race:
 	go test -v -p 1 -race -cover ./internal/...
 
+# Run the end-to-end suite (requires the compose stack from `make up`)
+e2e:
+	go test -count=1 ./test/e2e/
+
 # Static code analysis
 vet:
 	go vet ./...
@@ -71,6 +75,7 @@ help:
 	@echo "  make worker       Run Worker service locally"
 	@echo "  make test         Execute tests with coverage"
 	@echo "  make test-race    Execute tests with race detector"
+	@echo "  make e2e          Execute end-to-end suite (requires 'make up')"
 	@echo "  make vet          Run go vet code analysis"
 	@echo "  make build        Build API, Worker and Migrate binaries"
 	@echo "  make clean        Remove build artifacts"

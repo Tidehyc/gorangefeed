@@ -24,11 +24,11 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 | FIX-04 | P1 | 消费端先标记后处理，失败即静默丢事件 | `feed/fanout.go:68`、`feed/hot_score_consumer.go:56`、`notification/consumer.go:81` | M |
 | FIX-05 ✅ | P1 | 推荐流翻页重复（page 不参与召回） | `service/feed/service.go:824-961` | S |
 | FIX-06 ✅ | P2 | UID 维度限流写好了但没接线 | `middleware/ratelimit.go:113` | S |
-| FIX-07 | P2 | 文档与实现漂移 5 处 | `README.md`、`docs/*.md` | S |
+| FIX-07 ✅ | P2 | 文档与实现漂移 | `README.md`、`docs/*.md`、`scripts/README.md` | S |
 | FIX-08 ✅ | P2 | E2E 断言缺口（M9-05 声称的验证点没测） | `test/e2e/moderation_lifecycle_test.go` | S |
 
-进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 / FIX-06 / FIX-08 已完成并有测试覆盖**（见文末「已完成项实录」）。
-FIX-07 在 PR #5（纯文档）；只剩 FIX-04（消费端 ack 语义），改动最大，建议单独一个 PR。
+进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 / FIX-06 / FIX-07 / FIX-08 已完成并有测试覆盖**（见文末「已完成项实录」）。
+只剩 FIX-04（消费端 ack 语义），改动最大，单独一个 PR 收尾。
 
 
 ---
@@ -213,18 +213,20 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 
 ---
 
-## FIX-07 · P2 · 文档与实现漂移（5 处）
+## FIX-07 · P2 · 文档与实现漂移
 
-| 位置 | 文档写的 | 实际 |
-|---|---|---|
-| `README.md:3` | 「采用垂直切片架构（Vertical Slice）」 | 同文件 `:9` 与代码分层都是整洁架构（Clean Architecture），domain 零框架依赖 |
-| `README.md` 领域列表 | 只列 7 个领域 | 实际 12 个（多出 asset / moderation / outbox / playback / creator） |
-| `docs/REQUIREMENTS.md:17` | 「跑通 `scripts/e2e.sh`」 | `scripts/` 下只有 `check_migrations.sh` 和 `README.md`，无 `e2e.sh` |
-| `docs/REQUIREMENTS.md:14` | 收藏夹列为「排除，规划至二期」 | M8 已实现 `internal/domain/asset`（收藏夹 + 收藏关系 + Outbox 事件） |
-| `docs/PROGRESS.md:249` | 「支持 10 万+ 敏感词毫秒级匹配」 | `internal/service/moderation/ac_matcher.go:46/52` 硬编码 19 个词（10 高 + 9 中）；算法确实是 AC 自动机，但词库规模不实 |
-| `docs/BENCHMARK_REPORT.md:85` | 「后续可引入分布式单调发号器」 | M7 已实现 `internal/infra/redis/sequence.go`（`INCR` 发号 + `publish_seq`） |
+| 位置 | 文档原来写的 | 实际 | 改成了 |
+|---|---|---|---|
+| `README.md:3` | 「采用垂直切片架构（Vertical Slice）」 | 同文件 `:9` 与代码分层都是整洁架构（Clean Architecture），domain 零框架依赖 | 整洁架构（Clean Architecture） |
+| `README.md` 领域列表 | 只列 7 个领域 | `internal/domain/` 下 12 个包 | 列出全部 12 个 |
+| `docs/REQUIREMENTS.md` 验收标准 1 | 「跑通 `scripts/e2e.sh`」 | 无此脚本，且 Makefile 里也没有 e2e 目标 | 新增 `make e2e`，文档改指它 |
+| `docs/REQUIREMENTS.md` 边界 | 收藏夹列为「排除，规划至二期」 | M8 已实现 `internal/domain/asset`（多文件夹 + 收藏关系 + 观看历史/播放进度） | 移到「包含」，并从排除项删掉 |
+| `docs/PROGRESS.md:249` | 「支持 10 万+ 敏感词毫秒级匹配」 | `ac_matcher.go:46/52` 是 19 条硬编码种子词（10 高危 + 9 中危）；算法确实是 AC 自动机 | 「内置 19 条种子词库 + 运行时 `AddWord` 扩展」，并去掉「双数组」（实现是带 fail 指针的 trie，不是双数组） |
+| `docs/BENCHMARK_REPORT.md:85` | 「后续可引入分布式单调发号器」 | M7 已实现 `internal/infra/redis/sequence.go`（`INCR` + `publish_seq`） | 改成「已落地，下一步可演进为号段模式」 |
+| `scripts/README.md` | 声称存在 `seed/`、`deploy/` 两个目录 | 两个目录都不存在 | 改成描述真实的 `check_migrations.sh` 与 Makefile 入口 |
 
-**修复原则**：以代码为准改文档；敏感词那条改成可辩护的表述——「内置 19 条种子词库 + 支持运行时 `AddWord` 扩展、AC 自动机多模式匹配」，不要说规模。
+**修复原则**：以代码为准改文档。凡是「性能/规模」类表述，只写能从代码里数出来的东西——
+敏感词那条写 19 条种子词、写算法复杂度性质（随文本长度线性、与词库规模无关），不写「10 万+」「毫秒级」这类没有测量支撑的数字。
 
 ---
 
@@ -246,7 +248,7 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 2. ✅ **FIX-03**（改动最小、影响面清晰，先落地验证时间线量纲）。
 3. ✅ **FIX-05 + FIX-08 的翻页断言**一起。
 4. ✅ **FIX-06**（限流接线）。
-5. ⬜ **FIX-07**（纯文档，PR #5）。
+5. ✅ **FIX-07**（纯文档）。
 6. ⬜ **FIX-04**（触及三处消费者的 ack 语义，改动风险最高，单独一个 PR，跑全量 `./internal/...` + E2E 回归）。
 
 每个 PR 的验证口径统一为：`go build ./...` + `go vet ./...` + `go test -p 1 -count=1 ./internal/...` + 对应 E2E 用例；文档类改动只跑 `markdown` 检查即可。

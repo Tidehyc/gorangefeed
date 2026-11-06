@@ -1,6 +1,6 @@
 # GoRangeFeed
 
-> 短视频 Feed 流后端系统，覆盖「发布 → 分发 → 消费 → 互动 → 通知」全链路闭环，采用垂直切片架构（Vertical Slice），单体 API + 独立 Worker。
+> 短视频 Feed 流后端系统，覆盖「发布 → 分发 → 消费 → 互动 → 通知」全链路闭环，采用整洁架构（Clean Architecture），单体 API + 独立 Worker。
 
 ---
 
@@ -10,7 +10,7 @@ GoRangeFeed 遵循**整洁架构（Clean Architecture）**分层设计，领域�
 
 * **API 入口 (`cmd/api`)**：依赖注入装配、探针中间件、统一信封响应、路由组分发与平滑优雅停机；
 * **Worker 入口 (`cmd/worker`)**：独立进程，负责 Outbox 事件派发与异步消费；
-* **领域核心 (`internal/domain/`)**：纯业务实体、值对象与 Repository/TokenStore 抽象契约（覆盖 `account`、`video`、`interaction`、`relation`、`feed`、`notification`、`outbox`）；
+* **领域核心 (`internal/domain/`)**：纯业务实体、值对象与 Repository/TokenStore 抽象契约，共 12 个领域（`account`、`video`、`upload`、`creator`、`feed`、`interaction`、`relation`、`asset`、`notification`、`outbox`、`moderation`、`playback`）；
 * **应用服务 (`internal/service/`)**：业务用例编排、状态机控制与事务协调（如双 Token 轮转与重放防护）；
 * **传输接口 (`internal/http/`)**：Gin 控制器、请求/响应 DTO、参数绑定校验与路由组挂载；
 * **持久化基础设施 (`internal/infra/persistence/`)**：GORM MySQL 实体仓储与 Redis Lua 脚本会话存储实现；
