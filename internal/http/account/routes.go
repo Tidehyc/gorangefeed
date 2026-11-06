@@ -31,7 +31,7 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 	{
 		// /users/me and /users/avatar require mandatory JWTAuth and token revocation check
 		authRequired := userGroup.Group("")
-		authRequired.Use(middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted))
+		authRequired.Use(middleware.JWTAuth(jwtMgr, tokenStore))
 		{
 			authRequired.GET("/me", h.GetMe)
 			authRequired.PUT("/me", h.UpdateMe)
@@ -39,6 +39,6 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 		}
 
 		// Public user profile with soft auth (allows guests, extracts identity if valid token is provided)
-		userGroup.GET("/:userId", middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted), h.GetPublicProfile)
+		userGroup.GET("/:userId", middleware.SoftJWTAuth(jwtMgr, tokenStore), h.GetPublicProfile)
 	}
 }

@@ -17,9 +17,19 @@ type Service interface {
 	SubmitVideoForReview(ctx context.Context, videoID int64, policy domainmoderation.ReviewPolicy, title, desc string) (*domainmoderation.ReviewTask, error)
 	ReviewVideo(ctx context.Context, videoID int64, reviewerID int64, action string, note string) error
 	TakedownVideo(ctx context.Context, videoID int64, reviewerID int64, reason string) error
-	BanUser(ctx context.Context, userID int64, operatorID int64, reason string) error
+	// BanUser suspends the account and invalidates its credentials. The returned bool reports
+	// whether issued credentials were actually cut off (false means the account is suspended but
+	// already-issued access tokens keep working until they expire).
+	BanUser(ctx context.Context, userID int64, operatorID int64, reason string) (bool, error)
+	UnbanUser(ctx context.Context, userID int64, operatorID int64, reason string) error
 	ListReviewTasks(ctx context.Context, status domainmoderation.ReviewStatus, cursor int64, limit int) ([]*domainmoderation.ReviewTask, int64, bool, error)
 	ListAuditLogs(ctx context.Context, targetType string, targetID int64, limit int) ([]*domainmoderation.ModerationLog, error)
+}
+
+// SequenceAllocator allocates the globally monotonic publish sequence number that is
+// used as the score of the global timeline. Implemented by redis.SequenceGenerator.
+type SequenceAllocator interface {
+	NextPublishSeq(ctx context.Context) (int64, error)
 }
 
 type service struct {
@@ -29,6 +39,7 @@ type service struct {
 	timelineRepo domainfeed.TimelineRepository
 	accountRepo  domainaccount.Repository
 	tokenStore   domainaccount.TokenStore
+	seqAllocator SequenceAllocator
 	logger       *slog.Logger
 }
 
@@ -40,6 +51,7 @@ func NewService(
 	timelineRepo domainfeed.TimelineRepository,
 	accountRepo domainaccount.Repository,
 	tokenStore domainaccount.TokenStore,
+	seqAllocator SequenceAllocator,
 	logger *slog.Logger,
 ) Service {
 	if logger == nil {
@@ -55,6 +67,7 @@ func NewService(
 		timelineRepo: timelineRepo,
 		accountRepo:  accountRepo,
 		tokenStore:   tokenStore,
+		seqAllocator: seqAllocator,
 		logger:       logger,
 	}
 }
@@ -140,9 +153,7 @@ func (s *service) ReviewVideo(ctx context.Context, videoID int64, reviewerID int
 		if s.videoRepo != nil {
 			_ = s.videoRepo.UpdateStatus(ctx, videoID, 0, domainvideo.VideoStatusPublished)
 		}
-		if s.timelineRepo != nil {
-			_ = s.timelineRepo.Append(ctx, videoID)
-		}
+		s.appendApprovedToTimeline(ctx, videoID)
 		_ = s.repo.CreateLog(ctx, &domainmoderation.ModerationLog{
 			TargetType: domainmoderation.TargetTypeVideo,
 			TargetID:   videoID,
@@ -181,6 +192,58 @@ func (s *service) ReviewVideo(ctx context.Context, videoID int64, reviewerID int
 	}
 }
 
+// appendApprovedToTimeline restores an approved video to the global timeline. The timeline score
+// must stay in the publish_seq number space: writing the video ID instead would place the video
+// at a position computed from a different sequence and silently misorder the feed.
+func (s *service) appendApprovedToTimeline(ctx context.Context, videoID int64) {
+	if s.timelineRepo == nil {
+		return
+	}
+
+	seq := s.resolvePublishSeq(ctx, videoID)
+	if seq <= 0 {
+		s.logger.Warn("skip timeline append on approve: no publish sequence available", "video_id", videoID)
+		return
+	}
+
+	if err := s.timelineRepo.AppendWithSeq(ctx, videoID, seq); err != nil {
+		s.logger.Warn("failed to append approved video to timeline",
+			"video_id", videoID, "publish_seq", seq, "error", err)
+	}
+}
+
+// resolvePublishSeq returns the publish sequence already assigned to the video, allocating and
+// persisting a fresh one for rows that predate sequence allocation.
+func (s *service) resolvePublishSeq(ctx context.Context, videoID int64) int64 {
+	if s.videoRepo != nil {
+		video, err := s.videoRepo.FindByID(ctx, videoID)
+		if err == nil && video != nil && video.PublishSeq > 0 {
+			return video.PublishSeq
+		}
+	}
+
+	if s.seqAllocator == nil {
+		return 0
+	}
+
+	seq, err := s.seqAllocator.NextPublishSeq(ctx)
+	if err != nil {
+		s.logger.Warn("allocate publish sequence failed", "video_id", videoID, "error", err)
+		return 0
+	}
+	if seq <= 0 {
+		return 0
+	}
+
+	if s.videoRepo != nil {
+		if err := s.videoRepo.UpdatePublishSeq(ctx, videoID, seq); err != nil {
+			s.logger.Warn("persist allocated publish sequence failed",
+				"video_id", videoID, "publish_seq", seq, "error", err)
+		}
+	}
+	return seq
+}
+
 func (s *service) TakedownVideo(ctx context.Context, videoID int64, reviewerID int64, reason string) error {
 	task, err := s.repo.GetTaskByVideoID(ctx, videoID)
 	if err != nil {
@@ -215,7 +278,45 @@ func (s *service) TakedownVideo(ctx context.Context, videoID int64, reviewerID i
 	return nil
 }
 
-func (s *service) BanUser(ctx context.Context, userID int64, operatorID int64, reason string) error {
+func (s *service) BanUser(ctx context.Context, userID int64, operatorID int64, reason string) (bool, error) {
+	if userID <= 0 {
+		return false, domainmoderation.ErrInvalidTargetID
+	}
+	if operatorID <= 0 {
+		return false, domainmoderation.ErrUnauthorizedReviewer
+	}
+
+	if s.accountRepo != nil {
+		if err := s.accountRepo.UpdateStatus(ctx, userID, domainaccount.UserStatusSuspended); err != nil {
+			return false, fmt.Errorf("update user status to suspended: %w", err)
+		}
+	}
+
+	// Suspending the row alone does not stop credentials that were already issued: access tokens
+	// carry no session identifier and are only checked against the ban flag on the auth path.
+	credentialsRevoked := false
+	if s.tokenStore != nil {
+		if err := s.tokenStore.MarkUserBanned(ctx, userID, 0); err != nil {
+			s.logger.Warn("mark user banned failed: issued tokens stay valid until expiry",
+				"user_id", userID, "error", err)
+		} else {
+			credentialsRevoked = true
+		}
+	}
+
+	_ = s.repo.CreateLog(ctx, &domainmoderation.ModerationLog{
+		TargetType: domainmoderation.TargetTypeUser,
+		TargetID:   userID,
+		Action:     domainmoderation.ActionBanUser,
+		OperatorID: operatorID,
+		Reason:     reason,
+		CreatedAt:  time.Now().UTC(),
+	})
+
+	return credentialsRevoked, nil
+}
+
+func (s *service) UnbanUser(ctx context.Context, userID int64, operatorID int64, reason string) error {
 	if userID <= 0 {
 		return domainmoderation.ErrInvalidTargetID
 	}
@@ -224,15 +325,21 @@ func (s *service) BanUser(ctx context.Context, userID int64, operatorID int64, r
 	}
 
 	if s.accountRepo != nil {
-		if err := s.accountRepo.UpdateStatus(ctx, userID, domainaccount.UserStatusSuspended); err != nil {
-			return fmt.Errorf("update user status to suspended: %w", err)
+		if err := s.accountRepo.UpdateStatus(ctx, userID, domainaccount.UserStatusActive); err != nil {
+			return fmt.Errorf("update user status to active: %w", err)
+		}
+	}
+
+	if s.tokenStore != nil {
+		if err := s.tokenStore.ClearUserBanned(ctx, userID); err != nil {
+			s.logger.Warn("clear user ban flag failed", "user_id", userID, "error", err)
 		}
 	}
 
 	_ = s.repo.CreateLog(ctx, &domainmoderation.ModerationLog{
 		TargetType: domainmoderation.TargetTypeUser,
 		TargetID:   userID,
-		Action:     domainmoderation.ActionBanUser,
+		Action:     domainmoderation.ActionUnbanUser,
 		OperatorID: operatorID,
 		Reason:     reason,
 		CreatedAt:  time.Now().UTC(),

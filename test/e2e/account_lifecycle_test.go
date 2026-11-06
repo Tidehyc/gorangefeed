@@ -425,9 +425,9 @@ func setupE2ETestExtended(t *testing.T) (*e2eExtendedCtx, func()) {
 
 	moderationRepo := persistencemoderation.NewRepository(db)
 	acMatcher := servicemoderation.NewACMatcher()
-	moderationSvc := servicemoderation.NewService(moderationRepo, acMatcher, videoRepo, timelineRepo, repo, tokenStore, nil)
+	moderationSvc := servicemoderation.NewService(moderationRepo, acMatcher, videoRepo, timelineRepo, repo, tokenStore, seqGen, nil)
 	adminHandler := httpadmin.NewHandler(moderationSvc)
-	httpadmin.RegisterRoutes(engine, adminHandler, jwtMgr, tokenStore)
+	httpadmin.RegisterRoutes(engine, adminHandler, jwtMgr, tokenStore, repo)
 
 	deduplicator := rabbitmq.NewDeduplicator(db)
 	notifConsumer, _ := servicenotification.NewConsumer(notifRepo, notifBroadcaster, deduplicator, repo)

@@ -466,7 +466,13 @@ stateDiagram-v2
 | **运营后台** | `GET` | `/api/v1/admin/reviews` | AdminAuth | Query: `status`, `cursor`, `limit` | `{ items: [{ task_id, video_id, risk_score, matched_words, status }], next_cursor }` |
 | | `POST` | `/api/v1/admin/videos/:id/review` | AdminAuth | `action: "approve"/"reject"`, `review_note` | `{ video_id: 1, status: "approved" }` |
 | | `POST` | `/api/v1/admin/videos/:id/takedown` | AdminAuth | `reason` | `{ video_id: 1, status: "takedown", index_revoked: true }` |
-| | `POST` | `/api/v1/admin/users/:id/ban` | AdminAuth | `duration_seconds`, `reason` | `{ user_id: 1, status: "banned", token_revoked: true }` |
+| | `POST` | `/api/v1/admin/users/:id/ban` | AdminAuth | `reason` | `{ user_id: 1, status: "suspended", token_revoked: true }` |
+| | `POST` | `/api/v1/admin/users/:id/unban` | AdminAuth | `reason`（可选） | `{ user_id: 1, status: "active" }` |
+
+> `AdminAuth` = `JWTAuth` + `RequireRole(admin)`：管理接口对任意已登录用户返回 403，
+> 角色取自 `users.role`（`user` / `admin`），首次部署用 `make promote-admin ID=<user_id>` 提权。
+> `token_revoked` 回填封禁时是否成功写入 Redis 账号级封禁标记（`auth:banned:{userID}`），
+> 该标记同时让已签发的 access token 立即失效，并配合 refresh 查库阻断续期。
 
 ---
 

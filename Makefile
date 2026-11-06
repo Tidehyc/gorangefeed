@@ -1,4 +1,4 @@
-.PHONY: all up down down-v migrate migrate-down run worker test test-race vet build clean help
+.PHONY: all up down down-v migrate migrate-down promote-admin run worker test test-race vet build clean help
 
 all: vet test build
 
@@ -21,6 +21,12 @@ migrate:
 # Rollback one database migration step
 migrate-down:
 	go run ./cmd/migrate -action down
+
+# Grant the administrator role to a user (usage: make promote-admin ID=1)
+promote-admin:
+	@test -n "$(ID)" || (echo "usage: make promote-admin ID=<user_id>" && exit 1)
+	docker compose exec -T mysql mysql -uroot -proot_password gorangefeed \
+		-e "UPDATE users SET role='admin' WHERE id=$(ID); SELECT id, username, status, role FROM users WHERE id=$(ID);"
 
 # Run API service locally
 run:
@@ -60,6 +66,7 @@ help:
 	@echo "  make down-v       Stop Docker Compose services and delete volumes"
 	@echo "  make migrate      Execute database migration up"
 	@echo "  make migrate-down Rollback one database migration step"
+	@echo "  make promote-admin ID=<id> Grant the admin role to an existing user"
 	@echo "  make run          Run API service locally"
 	@echo "  make worker       Run Worker service locally"
 	@echo "  make test         Execute tests with coverage"

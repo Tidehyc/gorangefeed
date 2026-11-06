@@ -12,7 +12,7 @@ import (
 func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenStore domainaccount.TokenStore, rdb *redis.Client) {
 	v1 := r.Group("/api/v1")
 	chunkGroup := v1.Group("/videos/chunk")
-	chunkGroup.Use(middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted))
+	chunkGroup.Use(middleware.JWTAuth(jwtMgr, tokenStore))
 	{
 		chunkGroup.POST("/init", h.InitSession)
 		chunkGroup.POST("/upload", h.UploadChunk)

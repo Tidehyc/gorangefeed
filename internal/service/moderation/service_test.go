@@ -79,6 +79,8 @@ func (m *mockReviewRepo) ListLogs(ctx context.Context, targetType string, target
 
 type mockVideoRepoForMod struct {
 	updatedStatus map[int64]domainvideo.VideoStatus
+	videos        map[int64]*domainvideo.Video
+	updatedSeq    map[int64]int64
 }
 
 func (m *mockVideoRepoForMod) Create(ctx context.Context, video *domainvideo.Video) error { return nil }
@@ -89,7 +91,10 @@ func (m *mockVideoRepoForMod) CreateWithStatsAndOutbox(ctx context.Context, vide
 	return nil
 }
 func (m *mockVideoRepoForMod) FindByID(ctx context.Context, id int64) (*domainvideo.Video, error) {
-	return nil, nil
+	if v, ok := m.videos[id]; ok {
+		return v, nil
+	}
+	return nil, domainvideo.ErrVideoNotFound
 }
 func (m *mockVideoRepoForMod) FindDetailByID(ctx context.Context, id int64) (*domainvideo.Video, *domainvideo.VideoStats, error) {
 	return nil, nil, nil
@@ -105,19 +110,39 @@ func (m *mockVideoRepoForMod) UpdateStatus(ctx context.Context, id int64, author
 	return nil
 }
 func (m *mockVideoRepoForMod) UpdatePublishSeq(ctx context.Context, id int64, publishSeq int64) error {
+	if m.updatedSeq == nil {
+		m.updatedSeq = make(map[int64]int64)
+	}
+	m.updatedSeq[id] = publishSeq
 	return nil
 }
 
-type mockTimelineRepoForMod struct {
-	removedIDs  []int64
-	appendedIDs []int64
+type mockSeqAllocatorForMod struct {
+	seq   int64
+	calls int
 }
 
-func (m *mockTimelineRepoForMod) GetFloor(ctx context.Context) (int64, error)             { return 0, nil }
-func (m *mockTimelineRepoForMod) SetFloor(ctx context.Context, floor int64) error        { return nil }
-func (m *mockTimelineRepoForMod) Append(ctx context.Context, videoID int64) error        { m.appendedIDs = append(m.appendedIDs, videoID); return nil }
+func (m *mockSeqAllocatorForMod) NextPublishSeq(ctx context.Context) (int64, error) {
+	m.calls++
+	return m.seq, nil
+}
+
+type mockTimelineRepoForMod struct {
+	removedIDs   []int64
+	appendedIDs  []int64
+	appendedSeqs []int64
+}
+
+func (m *mockTimelineRepoForMod) GetFloor(ctx context.Context) (int64, error)     { return 0, nil }
+func (m *mockTimelineRepoForMod) SetFloor(ctx context.Context, floor int64) error { return nil }
+func (m *mockTimelineRepoForMod) Append(ctx context.Context, videoID int64) error {
+	m.appendedIDs = append(m.appendedIDs, videoID)
+	m.appendedSeqs = append(m.appendedSeqs, 0)
+	return nil
+}
 func (m *mockTimelineRepoForMod) AppendWithSeq(ctx context.Context, videoID int64, seq int64) error {
 	m.appendedIDs = append(m.appendedIDs, videoID)
+	m.appendedSeqs = append(m.appendedSeqs, seq)
 	return nil
 }
 func (m *mockTimelineRepoForMod) Remove(ctx context.Context, videoID int64) error {
@@ -136,7 +161,9 @@ type mockAccountRepoForMod struct {
 	userStatus map[int64]domainaccount.UserStatus
 }
 
-func (m *mockAccountRepoForMod) Create(ctx context.Context, user *domainaccount.User) error { return nil }
+func (m *mockAccountRepoForMod) Create(ctx context.Context, user *domainaccount.User) error {
+	return nil
+}
 func (m *mockAccountRepoForMod) FindByID(ctx context.Context, id int64) (*domainaccount.User, error) {
 	return nil, nil
 }
@@ -161,7 +188,7 @@ func TestModerationService_SubmitVideoForReview(t *testing.T) {
 	timelineRepo := &mockTimelineRepoForMod{}
 	accountRepo := &mockAccountRepoForMod{userStatus: make(map[int64]domainaccount.UserStatus)}
 
-	svc := servicemoderation.NewService(repo, nil, videoRepo, timelineRepo, accountRepo, nil, nil)
+	svc := servicemoderation.NewService(repo, nil, videoRepo, timelineRepo, accountRepo, nil, nil, nil)
 
 	// 1. Clean video -> auto approved
 	task1, err := svc.SubmitVideoForReview(ctx, 101, domainmoderation.ReviewPolicyPostReview, "日常记录：今天天气晴朗", "带小狗去户外草地玩")
@@ -207,7 +234,7 @@ func TestModerationService_HumanReviewAndTakedown(t *testing.T) {
 	timelineRepo := &mockTimelineRepoForMod{}
 	accountRepo := &mockAccountRepoForMod{userStatus: make(map[int64]domainaccount.UserStatus)}
 
-	svc := servicemoderation.NewService(repo, nil, videoRepo, timelineRepo, accountRepo, nil, nil)
+	svc := servicemoderation.NewService(repo, nil, videoRepo, timelineRepo, accountRepo, nil, nil, nil)
 
 	// Submit pending task
 	task, _ := svc.SubmitVideoForReview(ctx, 201, domainmoderation.ReviewPolicyPreReview, "日入过万测试", "详情私聊")
@@ -240,9 +267,9 @@ func TestModerationService_BanUser(t *testing.T) {
 	repo := newMockReviewRepo()
 	accountRepo := &mockAccountRepoForMod{userStatus: make(map[int64]domainaccount.UserStatus)}
 
-	svc := servicemoderation.NewService(repo, nil, nil, nil, accountRepo, nil, nil)
+	svc := servicemoderation.NewService(repo, nil, nil, nil, accountRepo, nil, nil, nil)
 
-	if err := svc.BanUser(ctx, 501, 999, "repeated spam and scam attempts"); err != nil {
+	if _, err := svc.BanUser(ctx, 501, 999, "repeated spam and scam attempts"); err != nil {
 		t.Fatalf("unexpected error banning user: %v", err)
 	}
 	if accountRepo.userStatus[501] != domainaccount.UserStatusSuspended {
@@ -252,5 +279,67 @@ func TestModerationService_BanUser(t *testing.T) {
 	logs, err := svc.ListAuditLogs(ctx, domainmoderation.TargetTypeUser, 501, 10)
 	if err != nil || len(logs) != 1 {
 		t.Fatalf("expected 1 audit log for banned user, got %v", logs)
+	}
+}
+
+func TestModerationService_ApproveAppendsTimelineWithPublishSeq(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockReviewRepo()
+	videoRepo := &mockVideoRepoForMod{
+		updatedStatus: make(map[int64]domainvideo.VideoStatus),
+		videos: map[int64]*domainvideo.Video{
+			301: {ID: 301, PublishSeq: 5000},
+		},
+	}
+	timelineRepo := &mockTimelineRepoForMod{}
+	accountRepo := &mockAccountRepoForMod{userStatus: make(map[int64]domainaccount.UserStatus)}
+
+	svc := servicemoderation.NewService(repo, nil, videoRepo, timelineRepo, accountRepo, nil, nil, nil)
+
+	if _, err := svc.SubmitVideoForReview(ctx, 301, domainmoderation.ReviewPolicyPreReview, "日入过万测试", "详情私聊"); err != nil {
+		t.Fatalf("unexpected error submitting for review: %v", err)
+	}
+	if err := svc.ReviewVideo(ctx, 301, 888, "approve", "cleared after review"); err != nil {
+		t.Fatalf("unexpected error approving: %v", err)
+	}
+
+	if len(timelineRepo.appendedSeqs) != 1 {
+		t.Fatalf("expected exactly 1 timeline append, got %v", timelineRepo.appendedSeqs)
+	}
+	if got := timelineRepo.appendedSeqs[0]; got != 5000 {
+		t.Fatalf("expected timeline score to be publish_seq 5000, got %d (video ID must not be used as score)", got)
+	}
+}
+
+func TestModerationService_ApproveAllocatesMissingPublishSeq(t *testing.T) {
+	ctx := context.Background()
+	repo := newMockReviewRepo()
+	videoRepo := &mockVideoRepoForMod{
+		updatedStatus: make(map[int64]domainvideo.VideoStatus),
+		videos: map[int64]*domainvideo.Video{
+			302: {ID: 302},
+		},
+	}
+	timelineRepo := &mockTimelineRepoForMod{}
+	accountRepo := &mockAccountRepoForMod{userStatus: make(map[int64]domainaccount.UserStatus)}
+	seqAllocator := &mockSeqAllocatorForMod{seq: 9001}
+
+	svc := servicemoderation.NewService(repo, nil, videoRepo, timelineRepo, accountRepo, nil, seqAllocator, nil)
+
+	if _, err := svc.SubmitVideoForReview(ctx, 302, domainmoderation.ReviewPolicyPreReview, "日入过万测试", "详情私聊"); err != nil {
+		t.Fatalf("unexpected error submitting for review: %v", err)
+	}
+	if err := svc.ReviewVideo(ctx, 302, 888, "approve", "cleared after review"); err != nil {
+		t.Fatalf("unexpected error approving: %v", err)
+	}
+
+	if seqAllocator.calls != 1 {
+		t.Fatalf("expected 1 sequence allocation, got %d", seqAllocator.calls)
+	}
+	if got := videoRepo.updatedSeq[302]; got != 9001 {
+		t.Fatalf("expected allocated publish_seq 9001 persisted, got %d", got)
+	}
+	if len(timelineRepo.appendedSeqs) != 1 || timelineRepo.appendedSeqs[0] != 9001 {
+		t.Fatalf("expected timeline append with seq 9001, got %v", timelineRepo.appendedSeqs)
 	}
 }

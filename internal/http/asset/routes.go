@@ -16,8 +16,8 @@ func RegisterRoutes(
 	tokenStore domainaccount.TokenStore,
 	rdb *redis.Client,
 ) {
-	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
-	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
+	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore)
+	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore)
 
 	v1 := r.Group("/api/v1")
 

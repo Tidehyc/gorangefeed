@@ -210,7 +210,7 @@ func main() {
 	// 8.9 Assemble Content Moderation & Compliance Domain
 	moderationRepo := persistencemoderation.NewRepository(db)
 	acMatcher := servicemoderation.NewACMatcher()
-	moderationSvc := servicemoderation.NewService(moderationRepo, acMatcher, videoRepo, timelineRepo, accountRepo, tokenStore, l)
+	moderationSvc := servicemoderation.NewService(moderationRepo, acMatcher, videoRepo, timelineRepo, accountRepo, tokenStore, seqGen, l)
 	adminHandler := httpadmin.NewHandler(moderationSvc)
 
 	// Hook into video publishing to allocate monotonic publish_seq and append to timeline
@@ -259,7 +259,7 @@ func main() {
 	httpplayback.RegisterRoutes(engine, playbackHandler, jwtMgr, tokenStore, rdb)
 	httpcreator.RegisterRoutes(engine, creatorHandler, jwtMgr, tokenStore, rdb)
 	httpasset.RegisterRoutes(engine, assetHandler, jwtMgr, tokenStore, rdb)
-	httpadmin.RegisterRoutes(engine, adminHandler, jwtMgr, tokenStore)
+	httpadmin.RegisterRoutes(engine, adminHandler, jwtMgr, tokenStore, accountRepo)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),

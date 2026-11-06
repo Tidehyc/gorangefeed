@@ -26,6 +26,14 @@ func blacklistKey(tokenID string) string {
 	return fmt.Sprintf("auth:blacklist:%s", tokenID)
 }
 
+// bannedUserDefaultTTL bounds how long a ban keeps invalidating credentials. It is refreshed
+// on every ban and cleared explicitly on unban, so it only needs to outlive the refresh window.
+const bannedUserDefaultTTL = 30 * 24 * time.Hour
+
+func bannedUserKey(userID int64) string {
+	return fmt.Sprintf("auth:banned:%d", userID)
+}
+
 func (s *redisTokenStore) CreateSession(ctx context.Context, sessionID, tokenID string, ttl time.Duration) error {
 	key := sessionKey(sessionID)
 	return s.client.Set(ctx, key, tokenID, ttl).Err()
@@ -86,6 +94,34 @@ func (s *redisTokenStore) BlacklistAccessToken(ctx context.Context, tokenID stri
 func (s *redisTokenStore) IsAccessTokenBlacklisted(ctx context.Context, tokenID string) (bool, error) {
 	key := blacklistKey(tokenID)
 	val, err := s.client.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return val > 0, nil
+}
+
+func (s *redisTokenStore) MarkUserBanned(ctx context.Context, userID int64, ttl time.Duration) error {
+	if userID <= 0 {
+		return nil
+	}
+	if ttl <= 0 {
+		ttl = bannedUserDefaultTTL
+	}
+	return s.client.Set(ctx, bannedUserKey(userID), "1", ttl).Err()
+}
+
+func (s *redisTokenStore) ClearUserBanned(ctx context.Context, userID int64) error {
+	if userID <= 0 {
+		return nil
+	}
+	return s.client.Del(ctx, bannedUserKey(userID)).Err()
+}
+
+func (s *redisTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, error) {
+	if userID <= 0 {
+		return false, nil
+	}
+	val, err := s.client.Exists(ctx, bannedUserKey(userID)).Result()
 	if err != nil {
 		return false, err
 	}
