@@ -352,4 +352,107 @@ func TestM4_5_HotAndRecommendLifecycle_EndToEnd(t *testing.T) {
 			t.Fatalf("expected fallback items from DB, got 0")
 		}
 	})
+
+	// =========================================================================
+	// E2E-M4.5-07: 推荐流翻页无重复（游标按 offset 推进）
+	// =========================================================================
+	t.Run("E2E-M4.5-07_Recommend_Pagination_No_Duplicates", func(t *testing.T) {
+		// Runs after M4.5-06 has cleared the hot keys, so every recall channel is deterministic:
+		// hot falls back to like-rank, latest comes from the timeline, explore is seeded.
+		const limit = 5
+		const maxPages = 20
+
+		seen := make(map[int64]int)
+		served := 0
+		cursor := ""
+
+		for page := 1; page <= maxPages; page++ {
+			w := httptest.NewRecorder()
+			path := fmt.Sprintf("/api/v1/feed/recommend?limit=%d", limit)
+			if cursor != "" {
+				path += "&cursor=" + cursor
+			}
+			req := newJSONRequest(http.MethodGet, path, nil, "192.168.1.100")
+			engine.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("page %d failed: %d, body: %s", page, w.Code, w.Body.String())
+			}
+
+			var resp recommendFeedResponseEnvelope
+			parseJSONResponse(t, w, &resp)
+
+			for _, item := range resp.Data.Items {
+				if prev, ok := seen[item.ID]; ok {
+					t.Fatalf("video %d served twice: page %d and page %d", item.ID, prev, page)
+				}
+				seen[item.ID] = page
+				served++
+			}
+
+			if !resp.Data.HasMore {
+				if resp.Data.NextCursor != "" {
+					t.Fatalf("page %d: next_cursor must be empty when has_more=false", page)
+				}
+				if served == 0 {
+					t.Fatalf("pagination terminated without serving any item")
+				}
+				return
+			}
+			if resp.Data.NextCursor == "" {
+				t.Fatalf("page %d: has_more=true but next_cursor is empty", page)
+			}
+			cursor = resp.Data.NextCursor
+		}
+
+		t.Fatalf("recommend pagination did not terminate within %d pages (served %d unique items)", maxPages, served)
+	})
+
+	// =========================================================================
+	// E2E-M4.5-08: 同一游标重复请求结果幂等
+	// =========================================================================
+	t.Run("E2E-M4.5-08_Recommend_Cursor_Idempotent", func(t *testing.T) {
+		first := httptest.NewRecorder()
+		req1 := newJSONRequest(http.MethodGet, "/api/v1/feed/recommend?limit=5", nil, "192.168.1.100")
+		engine.ServeHTTP(first, req1)
+		if first.Code != http.StatusOK {
+			t.Fatalf("first page failed: %d, body: %s", first.Code, first.Body.String())
+		}
+		var firstResp recommendFeedResponseEnvelope
+		parseJSONResponse(t, first, &firstResp)
+		if firstResp.Data.NextCursor == "" {
+			t.Fatalf("expected a next_cursor to replay")
+		}
+
+		fetch := func() []int64 {
+			w := httptest.NewRecorder()
+			req := newJSONRequest(
+				http.MethodGet,
+				"/api/v1/feed/recommend?limit=5&cursor="+firstResp.Data.NextCursor,
+				nil,
+				"192.168.1.100",
+			)
+			engine.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("replay failed: %d, body: %s", w.Code, w.Body.String())
+			}
+			var resp recommendFeedResponseEnvelope
+			parseJSONResponse(t, w, &resp)
+			ids := make([]int64, 0, len(resp.Data.Items))
+			for _, item := range resp.Data.Items {
+				ids = append(ids, item.ID)
+			}
+			return ids
+		}
+
+		a := fetch()
+		b := fetch()
+		if len(a) != len(b) {
+			t.Fatalf("replaying the same cursor returned different lengths: %d vs %d", len(a), len(b))
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				t.Fatalf("replaying the same cursor is not idempotent: item[%d] %d vs %d", i, a[i], b[i])
+			}
+		}
+	})
 }

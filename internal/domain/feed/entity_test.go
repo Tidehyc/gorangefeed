@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"encoding/base64"
 	"testing"
 	"time"
 )
@@ -166,37 +167,52 @@ func TestHotCursor_EncodeAndDecode(t *testing.T) {
 }
 
 func TestRecommendCursor_EncodeAndDecode(t *testing.T) {
-	// 1. Initial page
-	emptyCursor := EncodeRecommendCursor(1, 0)
+	// 1. Initial request: no offset consumed, no seed yet
+	emptyCursor := EncodeRecommendCursor(0, 0)
 	if emptyCursor != "" {
-		t.Fatalf("expected empty string for initial page, got %s", emptyCursor)
+		t.Fatalf("expected empty string for initial request, got %s", emptyCursor)
 	}
 
-	page, seed, err := DecodeRecommendCursor("")
-	if err != nil || page != 1 || seed != 0 {
-		t.Fatalf("expected (1, 0, nil), got (%d, %d, %v)", page, seed, err)
+	offset, seed, err := DecodeRecommendCursor("")
+	if err != nil || offset != 0 || seed != 0 {
+		t.Fatalf("expected (0, 0, nil), got (%d, %d, %v)", offset, seed, err)
 	}
 
 	// 2. Normal roundtrip
-	expectedPage := 3
+	expectedOffset := 10
 	expectedSeed := int64(987654321)
-	encoded := EncodeRecommendCursor(expectedPage, expectedSeed)
+	encoded := EncodeRecommendCursor(expectedOffset, expectedSeed)
 	if encoded == "" {
 		t.Fatalf("expected non-empty encoded cursor")
 	}
 
-	page, seed, err = DecodeRecommendCursor(encoded)
+	offset, seed, err = DecodeRecommendCursor(encoded)
 	if err != nil {
 		t.Fatalf("unexpected decode error: %v", err)
 	}
-	if page != expectedPage || seed != expectedSeed {
-		t.Fatalf("roundtrip mismatch: got (%d, %d), want (%d, %d)", page, seed, expectedPage, expectedSeed)
+	if offset != expectedOffset || seed != expectedSeed {
+		t.Fatalf("roundtrip mismatch: got (%d, %d), want (%d, %d)", offset, seed, expectedOffset, expectedSeed)
 	}
 
-	// 3. Invalid inputs
+	// 3. A pre-offset cursor (page-based) must not be interpreted as a position
+	legacy := base64.URLEncoding.EncodeToString([]byte(`{"scene":"recommend","page":3,"seed":42}`))
+	offset, seed, err = DecodeRecommendCursor(legacy)
+	if err != nil {
+		t.Fatalf("unexpected decode error for legacy cursor: %v", err)
+	}
+	if offset != 0 || seed != 42 {
+		t.Fatalf("legacy cursor should restart the session, got offset=%d seed=%d", offset, seed)
+	}
+
+	// 4. Invalid inputs
 	_, _, err = DecodeRecommendCursor("not-valid-base64!!!")
 	if err != ErrInvalidRecommendCursor {
 		t.Fatalf("expected ErrInvalidRecommendCursor for bad base64, got %v", err)
+	}
+
+	negative := base64.URLEncoding.EncodeToString([]byte(`{"scene":"recommend","offset":-1,"seed":42}`))
+	if _, _, err = DecodeRecommendCursor(negative); err != ErrInvalidRecommendCursor {
+		t.Fatalf("expected ErrInvalidRecommendCursor for negative offset, got %v", err)
 	}
 }
 
