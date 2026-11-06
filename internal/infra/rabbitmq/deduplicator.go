@@ -15,11 +15,8 @@ type Deduplicator interface {
 	// MarkConsumed records the eventID into consumed_events.
 	// Returns (isNew: true, err: nil) if successfully recorded for the first time.
 	// Returns (isNew: false, err: nil) if already consumed previously (duplicate replay).
+	// Consumers call this last, once their side effects have landed.
 	MarkConsumed(ctx context.Context, eventID string) (bool, error)
-
-	// ExecuteWithDeduplication executes a business operation fn inside a transaction that records eventID.
-	// If the event was already consumed, it safely returns nil without executing fn (idempotent skip).
-	ExecuteWithDeduplication(ctx context.Context, eventID string, fn func(tx *gorm.DB) error) error
 
 	// IsConsumed checks if an event has already been consumed.
 	IsConsumed(ctx context.Context, eventID string) (bool, error)
@@ -60,39 +57,6 @@ func (d *gormDeduplicator) MarkConsumed(ctx context.Context, eventID string) (bo
 	}
 
 	return true, nil
-}
-
-func (d *gormDeduplicator) ExecuteWithDeduplication(ctx context.Context, eventID string, fn func(tx *gorm.DB) error) error {
-	if eventID == "" {
-		return errors.New("event ID cannot be empty")
-	}
-
-	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 1. Attempt to insert into consumed_events
-		err := tx.Exec(
-			"INSERT INTO consumed_events (event_id, consumed_at) VALUES (?, ?)",
-			eventID,
-			time.Now(),
-		).Error
-
-		if err != nil {
-			var mysqlErr *mysql.MySQLError
-			if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
-				// Duplicate primary key: already consumed! Return nil to complete idempotently
-				return nil
-			}
-			return fmt.Errorf("failed to record consumed event in tx: %w", err)
-		}
-
-		// 2. Execute business handler in the same transaction
-		if fn != nil {
-			if err := fn(tx); err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
 }
 
 func (d *gormDeduplicator) IsConsumed(ctx context.Context, eventID string) (bool, error) {
