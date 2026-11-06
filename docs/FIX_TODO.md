@@ -162,8 +162,8 @@ FIX-04 是最后一个，单独一个 PR 收尾（消费端 ack 语义，改动�
 
 - 新增「业务失败不标记」用例（三处消费者各一条）：`TestFanoutService_FanoutFailure_DoesNotMarkConsumed`、
   `TestConsumer_ProcessingFailure_DoesNotMarkConsumed`、`TestHotScoreConsumer_ApplyFailure_DoesNotMarkConsumed`。
-- 手工验证：临时让通知写库抛错，观察日志里同一 `event_id` 最多重投 5 次且最终进 `<queue>.dead`，而不是一次就 ACK。
-  这一条**没有做**（需要停 MySQL 并盯 worker 日志的运维演练），改用单测覆盖判定表 + 失败不标记的不变量，见实录。
+- 手工验证：临时让业务失败，观察日志里同一 `event_id` 最多重投 5 次且最终进 `<queue>.dead`，而不是一次就 ACK。
+  已在合并后补做（用 `docker stop gorangefeed-redis` 制造可重试失败），实测记录见实录的「死信队列演练」。
 
 ---
 
@@ -426,8 +426,9 @@ score 直接落成自增主键。用例里的视频是**绕过发布流程**直�
    `*gorm.DB` 的。硬塞一个 `CreateTx(ctx, tx *gorm.DB, ...)` 会把 gorm 泄进领域层，为了一条
    「插入 + 标记」的原子性付出架构代价。而通知插入本来就已经幂等（唯一键 + `DO NOTHING`），
    重投一次的结果与事务版完全一致，所以选了「先落库、再标记」。
-   ⇒ `ExecuteWithDeduplication` 目前仍是**生产代码零调用**的既有死代码，本轮不动它（改动面已经很大），
-   留作后续清理。
+   ⇒ `ExecuteWithDeduplication` 于是成了**生产代码零调用**的死代码，且它把 `*gorm.DB` 写进了 dedup 契约；
+   已在后续提交里连同 2 个 mock 与 1 条针对它本身的单测一起删除（接口现在只剩 `MarkConsumed` /
+   `IsConsumed` / `PurgeConsumedBefore`）。
 2. **热榜守卫必须原子化，不能 `SETNX` 完再 `ZINCRBY`**。两步写法有个新的丢事件窗口：`SETNX` 成功、
    紧接着 `ZINCRBY` 失败（连接断开 / OOM），守卫已经落下，重投进来跳过加分 —— 与原来的 bug 一模一样，
    只是丢的层次从「标记」挪到了「守卫」。改成一段 Lua 把 `SET NX EX` 与 `ZINCRBY` 一次执行：
@@ -471,12 +472,33 @@ score 直接落成自增主键。用例里的视频是**绕过发布流程**直�
 - `go test -p 1 -count=1 ./internal/...` → 58 个包全 ok；
 - `make e2e` → `ok github.com/Tidehyc/gorangefeed/test/e2e 74.458s`。
 
+**死信队列演练（2026-11-06 实测，本机 docker 依赖）**
+
+环境：`gorangefeed-mysql` / `gorangefeed-redis` / `gorangefeed-rabbitmq` 三个容器 + 本地 `cmd/worker`，
+观测队列 `queue.gorangefeed.following_feed`。
+
+| 场景 | 操作 | 实测结果 |
+|---|---|---|
+| 对照组 | 发布合法 `video.published`（video 987001 / author 153636835，该号有 1 个粉丝），message_id `drill-control-1` | 主队列归 0、死信 0；`ZSCORE feed:following:inbox:153636836 987001 = 987001`（确实写了扇出）；`consumed_events` 有该 eventID |
+| A · 畸形 payload | body 为 `{"video_id":`，message_id `drill-permanent-1` | **一次即进死信**：`reason="permanent failure" attempts=1`，主队列 0 / 死信 1。死信消息保留 `x-attempts=1`、`x-last-error=failed to unmarshal video published payload: unexpected end of JSON input`、`x-original-queue`、`x-original-routing-key=video.published` |
+| B · 可重试失败 | `docker stop gorangefeed-redis` 后发布同样合法的消息，message_id `drill-retry-1` | 日志 `attempt=1..4 requeueing`（间隔 1~3s），第 5 次 `attempts=5 reason="retry budget exhausted"` 进死信；主队列 0 / 死信 1；**`consumed_events` 中 `drill-retry-1` 计数 = 0** |
+| B 续 · 回捞 | 恢复 Redis，重投同一 message_id 与 body | `ZSCORE ... 987002 = 987002`（副作用补齐），`consumed_events` 计数变 1 |
+
+三条不变量在真实 broker 上成立：
+
+1. **失败的事件不落标记**（`drill-retry-1` 尝试 5 次后 `consumed_events` 仍为 0）—— 修前这里会是 1，事件就此消失。
+2. **不会无限重投**（5 次封顶后转死信，主队列归 0，不再阻塞后续消息）。
+3. **死信可回捞且回捞不重复**（同一 message_id 重投后扇出补齐、标记才落下）。
+
+演练数据已清理：inbox 成员 `987001/987002`、`drill-%` 标记、死信队列内容均已删除。
+
+**运维注意**：E2E 自带消费者，演练用的独立 worker 会和它抢同一批队列，消息被两个消费者瓜分。
+第一次跑 `make e2e` 就因此出现了两条假失败（`cycle 4 expected to dispatch event, but got 0`、
+`E2E-M4.5-02_Snapshot_Pagination_Stability`）。停掉 worker 后重跑即 `ok ... 83.294s`。
+所以**跑 E2E 前必须确认没有独立 worker 在消费**，否则失败信息与被测代码无关。
+
 **遗留取舍**
 
-1. **未做真实 broker 故障演练**：死信队列的落盘行为只有单测层的判定表覆盖，没有「停掉 MySQL → 观察
-   worker 重试 5 次 → 消息出现在 `<queue>.dead`」的实测记录。要补这一条得停依赖、盯日志，属于运维演练。
-2. **`consumed_events` 与热榜守卫各自 7 天**：两边保留期一致，但它们是两套独立状态。Redis 丢数据时
+1. **`consumed_events` 与热榜守卫各自 7 天**：两边保留期一致，但它们是两套独立状态。Redis 丢数据时
    热榜守卫消失，此时若同一条消息又被重投（超过 7 天基本不会发生），分数会重复累加一次。
    分数是可再生的近似值，接受这个偏差，不为此引入跨存储事务。
-3. **`ExecuteWithDeduplication` 仍是死代码**（见偏差 1）。它把 `*gorm.DB` 写进了 dedup 契约里，
-   长期看应该删掉，但删除会波及 2 个 mock 与 1 条针对实现本身的单测，与本轮的 ack 语义修复不是一件事。

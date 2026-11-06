@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/Tidehyc/gorangefeed/internal/infra/config"
 	"github.com/Tidehyc/gorangefeed/internal/infra/mysql"
@@ -82,41 +83,55 @@ func TestDeduplicator_MarkConsumed(t *testing.T) {
 	}
 }
 
-func TestDeduplicator_ExecuteWithDeduplication(t *testing.T) {
+func TestDeduplicator_PurgeConsumedBefore(t *testing.T) {
 	db, dedup := setupDeduplicatorDB(t)
 	if db == nil {
 		return
 	}
 	ctx := context.Background()
 
-	eventID := uuid.New().String()
+	oldEventID := uuid.New().String()
+	freshEventID := uuid.New().String()
 	defer func() {
-		db.Exec("DELETE FROM consumed_events WHERE event_id = ?", eventID)
+		db.Exec("DELETE FROM consumed_events WHERE event_id IN (?, ?)", oldEventID, freshEventID)
 	}()
 
-	executedCount := 0
-
-	// 1. First execution: handler should run
-	err := dedup.ExecuteWithDeduplication(ctx, eventID, func(tx *gorm.DB) error {
-		executedCount++
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("first ExecuteWithDeduplication failed: %v", err)
+	if _, err := dedup.MarkConsumed(ctx, oldEventID); err != nil {
+		t.Fatalf("MarkConsumed(old) failed: %v", err)
 	}
-	if executedCount != 1 {
-		t.Errorf("expected handler executed once, got %d", executedCount)
+	if _, err := dedup.MarkConsumed(ctx, freshEventID); err != nil {
+		t.Fatalf("MarkConsumed(fresh) failed: %v", err)
 	}
 
-	// 2. Second execution with same eventID: duplicate should safely skip handler
-	err = dedup.ExecuteWithDeduplication(ctx, eventID, func(tx *gorm.DB) error {
-		executedCount++
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("second ExecuteWithDeduplication failed: %v", err)
+	// Age one marker past the retention cutoff, leave the other alone.
+	if err := db.Exec(
+		"UPDATE consumed_events SET consumed_at = ? WHERE event_id = ?",
+		time.Now().Add(-30*24*time.Hour), oldEventID,
+	).Error; err != nil {
+		t.Fatalf("failed to backdate marker: %v", err)
 	}
-	if executedCount != 1 {
-		t.Errorf("expected handler not executed on duplicate, executedCount=%d", executedCount)
+
+	removed, err := dedup.PurgeConsumedBefore(ctx, time.Now().Add(-7*24*time.Hour))
+	if err != nil {
+		t.Fatalf("PurgeConsumedBefore failed: %v", err)
+	}
+	if removed < 1 {
+		t.Fatalf("expected at least the backdated marker to be purged, removed=%d", removed)
+	}
+
+	oldConsumed, err := dedup.IsConsumed(ctx, oldEventID)
+	if err != nil {
+		t.Fatalf("IsConsumed(old) failed: %v", err)
+	}
+	if oldConsumed {
+		t.Errorf("expected the old marker to be purged")
+	}
+
+	freshConsumed, err := dedup.IsConsumed(ctx, freshEventID)
+	if err != nil {
+		t.Fatalf("IsConsumed(fresh) failed: %v", err)
+	}
+	if !freshConsumed {
+		t.Errorf("expected the fresh marker to survive the purge")
 	}
 }

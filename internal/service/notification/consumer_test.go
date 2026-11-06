@@ -12,7 +12,6 @@ import (
 	infrarabbitmq "github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	infraredis "github.com/Tidehyc/gorangefeed/internal/infra/redis"
 	servicenotification "github.com/Tidehyc/gorangefeed/internal/service/notification"
-	"gorm.io/gorm"
 )
 
 type mockDeduplicator struct {
@@ -31,10 +30,6 @@ func (m *mockDeduplicator) MarkConsumed(ctx context.Context, eventID string) (bo
 	}
 	m.consumed[eventID] = true
 	return true, nil
-}
-
-func (m *mockDeduplicator) ExecuteWithDeduplication(ctx context.Context, eventID string, fn func(tx *gorm.DB) error) error {
-	return nil
 }
 
 func (m *mockDeduplicator) IsConsumed(ctx context.Context, eventID string) (bool, error) {
@@ -133,7 +128,7 @@ func TestConsumer_HandleCommentEvent_WithMentions(t *testing.T) {
 
 	mockFinder := &mockAccountFinder{
 		byUsername: map[string]*domainaccount.User{
-			"alice": {ID: 301, Username: "alice", Nickname: "Alice"},
+			"alice":   {ID: 301, Username: "alice", Nickname: "Alice"},
 			"charlie": {ID: 302, Username: "charlie", Nickname: "Charlie"},
 		},
 		byID: map[int64]*domainaccount.User{

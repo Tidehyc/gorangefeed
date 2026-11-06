@@ -11,12 +11,11 @@ import (
 	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainrelation "github.com/Tidehyc/gorangefeed/internal/domain/relation"
 	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
-	"gorm.io/gorm"
 )
 
 type mockRelationRepoForFanout struct {
-	statsMap     map[int64]*domainrelation.RelationStats
-	followersMap map[int64][]int64
+	statsMap      map[int64]*domainrelation.RelationStats
+	followersMap  map[int64][]int64
 	followingsMap map[int64][]int64
 }
 
@@ -142,10 +141,6 @@ func (m *mockDeduplicatorForFanout) MarkConsumed(ctx context.Context, eventID st
 	}
 	m.consumedMap[eventID] = true
 	return true, nil
-}
-
-func (m *mockDeduplicatorForFanout) ExecuteWithDeduplication(ctx context.Context, eventID string, fn func(tx *gorm.DB) error) error {
-	return nil
 }
 
 func (m *mockDeduplicatorForFanout) IsConsumed(ctx context.Context, eventID string) (bool, error) {
