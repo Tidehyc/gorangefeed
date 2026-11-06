@@ -36,6 +36,9 @@ type Service interface {
 	// DeleteAccount soft-deletes the account: the author's videos are hidden first, then the
 	// account status becomes deleted and all issued tokens are retired.
 	DeleteAccount(ctx context.Context, userID int64, password string) error
+	// GetProfileStats aggregates the counters rendered on a profile page. A service without a
+	// stats provider returns a zeroed block rather than failing the profile request.
+	GetProfileStats(ctx context.Context, userID int64) (domainaccount.ProfileStats, error)
 }
 
 // Option customises a service instance without widening the constructor signature for every
@@ -49,12 +52,21 @@ func WithVideoHider(hider domainaccount.VideoHider) Option {
 	}
 }
 
+// WithProfileStats injects the read model that aggregates following/follower/work/like counters.
+// Without it every profile reports zero, which is the pre-M14 behaviour.
+func WithProfileStats(provider domainaccount.ProfileStatsProvider) Option {
+	return func(s *service) {
+		s.profileStats = provider
+	}
+}
+
 type service struct {
-	repo       domainaccount.Repository
-	tokenStore domainaccount.TokenStore
-	jwtManager *jwt.TokenManager
-	cfg        config.JWTConfig
-	videoHider domainaccount.VideoHider
+	repo         domainaccount.Repository
+	tokenStore   domainaccount.TokenStore
+	jwtManager   *jwt.TokenManager
+	cfg          config.JWTConfig
+	videoHider   domainaccount.VideoHider
+	profileStats domainaccount.ProfileStatsProvider
 }
 
 // NewService creates a new account application Service.
@@ -224,6 +236,20 @@ func (s *service) GetProfile(ctx context.Context, userID int64) (*domainaccount.
 		return nil, err
 	}
 	return user, nil
+}
+
+// GetProfileStats returns the profile counters. Aggregation failures degrade to zeros on
+// purpose: a profile page must still render its avatar, nickname and settings entry when the
+// stats read model is unavailable.
+func (s *service) GetProfileStats(ctx context.Context, userID int64) (domainaccount.ProfileStats, error) {
+	if s.profileStats == nil {
+		return domainaccount.ProfileStats{}, nil
+	}
+	stats, err := s.profileStats.GetProfileStats(ctx, userID)
+	if err != nil {
+		return domainaccount.ProfileStats{}, nil
+	}
+	return stats, nil
 }
 
 func (s *service) UpdateProfile(ctx context.Context, userID int64, nickname, bio string) (*domainaccount.User, error) {

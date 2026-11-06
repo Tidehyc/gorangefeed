@@ -254,6 +254,9 @@
 
 ## 十七、M10 全栈 Web 短视频流式演示客户端任务明细
 
+> 2026-11-06 注：M10 交付的 `web/index.html` 单文件演示页已归档为 `web/legacy/index.html`。
+> 正式客户端（Vite + React + TS + Tailwind，M14 编号体系见 `docs/FRONTEND_REQUIREMENTS.md`）已取代它成为 `/` 的文档根。
+
 | 编号 | 任务描述 | 前置依赖 | 验收标准 | 状态 |
 |---|---|---|---|---|
 | **M10-01**| 响应式短视频流 Web 播放器脚手架 | M2, M3 | 在 `web/` 下构建响应式 HTML5 极简短视频播放界面（无厚重前端构建依赖）；支持鼠标滚轮与移动端触屏上下滑切视频；集成 HTTP 206 Partial Content 分段流式解码播放与首屏静音自动起播 | `DONE` |

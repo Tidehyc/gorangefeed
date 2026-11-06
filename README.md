@@ -27,6 +27,7 @@ GoRangeFeed 遵循**整洁架构（Clean Architecture）**分层设计，领域�
 
 * **API 入口 (`cmd/api`)**：依赖注入装配、探针中间件、统一信封响应、路由组分发与平滑优雅停机；
 * **Worker 入口 (`cmd/worker`)**：独立进程，负责 Outbox 事件派发、异步消费、延迟任务调度与周期性维护（时间线裁剪、`consumed_events` 保留期清理）；
+* **Web 客户端 (`web/`)**：移动端优先的短视频消费/创作客户端（全屏竖向滑动、双击点赞、评论抽屉、分片发布、个人中心），由 API 同源托管（构建产物 `web/dist`），无 CORS 依赖；
 * **领域核心 (`internal/domain/`)**：纯业务实体、值对象与 Repository/TokenStore 抽象契约，共 12 个领域（`account`、`video`、`upload`、`creator`、`feed`、`interaction`、`relation`、`asset`、`notification`、`outbox`、`moderation`、`playback`）；
 * **应用服务 (`internal/service/`)**：业务用例编排、状态机控制与事务协调（如双 Token 轮转、审核过审流水线、事件消费）；
 * **传输接口 (`internal/http/`)**：Gin 控制器、请求/响应 DTO、参数绑定校验与路由组挂载；
@@ -68,7 +69,8 @@ GoRangeFeed 遵循**整洁架构（Clean Architecture）**分层设计，领域�
 | 缓存与索引 | Redis 7.0 | `:6380` (映射容器 6379) |
 | 消息队列 | RabbitMQ 3-management | `:5673` (AMQP) / `:15673` (管理后台) |
 | 监控中心 | Prometheus 3.1.0 | `:9090` (Prometheus Web UI) |
-| 数据库迁移 | golang-migrate，14 个版本（`000001`~`000014`），脚本在 `migrations/` | — |
+| 数据库迁移 | golang-migrate，15 个版本（`000001`~`000015`），脚本在 `migrations/` | — |
+| 前端客户端 | React 18 + Vite 5 + TypeScript (strict) + Tailwind CSS 3 + Zustand | 开发 `:5173`（`make web-dev`，代理到 `:8080`） |
 | 日志与监控 | `log/slog` + Prometheus | API `:8080/metrics` / Worker `:9091/metrics` |
 
 ---
@@ -102,9 +104,34 @@ make run
 make worker
 ```
 
+### 5. 构建前端并填充演示数据（可选，推荐）
+
+```bash
+# 1) 渲染 12 条无版权演示视频与封面（需要 ffmpeg，或 pip install imageio-ffmpeg）
+make seed-media
+
+# 2) 写入 6 个演示账号、12 条作品、关注关系与互动数据
+make seed
+
+# 3) 构建 React 客户端到 web/dist（`make run` 会自动同源托管）
+make web-build
+```
+
+完成后打开 http://127.0.0.1:8080/ 即为新客户端。演示账号（密码统一 `Passw0rd!`）：
+
+| 用户名 | 角色 |
+|---|---|
+| `alice` | 创作主力，6 条旅行作品，与 bob/carol 互相关注 |
+| `bob` | 美食探店 |
+| `carol` | 城市人文 |
+| `dave` | 只看不发（关注流空态演示） |
+| `erin` | 宠物 |
+| `frank` | 徒步 |
+
+> 前端开发态用 `make web-dev`（Vite 监听 :5173，代理 `/api`、`/media` 到 :8080）。
 > 需要管理员权限的接口（审核、下架、封禁）要求 `users.role = 'admin'`，首个管理员用 `make promote-admin ID=<user_id>` 提权。
 
-### 5. 探针与指标验证
+### 6. 探针与指标验证
 ```bash
 # 检查存活探针 (Liveness)
 curl http://127.0.0.1:8080/healthz
@@ -124,7 +151,7 @@ curl http://127.0.0.1:9091/metrics
 # 浏览器打开: http://127.0.0.1:9090
 ```
 
-### 6. 测试与代码校验
+### 7. 测试与代码校验
 ```bash
 # 静态代码检查
 make vet
@@ -193,6 +220,7 @@ Feed 读接口大多为软鉴权（游客可访问，带 token 时注入 `is_lik
 | 文档 | 内容 |
 |---|---|
 | [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | 功能与非功能需求、验收口径 |
+| [`docs/FRONTEND_REQUIREMENTS.md`](docs/FRONTEND_REQUIREMENTS.md) | Web 客户端（M14）页面结构、交互与验收脚本 |
 | [`docs/DESIGN.md`](docs/DESIGN.md) | 详细设计：表结构、缓存键、异步链路 |
 | [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md) | 分模块架构决策与同类项目对比 |
 | [`docs/PROGRESS.md`](docs/PROGRESS.md) | 里程碑进度（M0~M10 完成，M11~M13 规划中） |
@@ -205,14 +233,15 @@ Feed 读接口大多为软鉴权（游客可访问，带 token 时注入 `is_lik
 ## 八、目录结构
 
 ```
-cmd/            api / worker / migrate 三个入口
+cmd/            api / worker / migrate / seed 四个入口
 internal/
   domain/       12 个领域的实体与契约（零框架依赖）
   service/      用例编排、状态机、事务与消费者
   http/         Gin 控制器、DTO、路由组
   infra/        持久化、Redis、RabbitMQ、调度器、中间件、配置
-migrations/     14 个版本的正向/回滚脚本
+migrations/     15 个版本的正向/回滚脚本
 test/           e2e 黑盒生命周期、benchmark 压测、testutil 脚手架
 configs/        本地配置
-scripts/        迁移校验等运维脚本
+scripts/        迁移校验、种子媒体渲染等运维脚本
+web/            React 客户端（Vite + TS + Tailwind），构建产物在 web/dist
 ```

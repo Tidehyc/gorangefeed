@@ -145,6 +145,13 @@ type TagTimelineRepository interface {
 	ListVideoIDsByTag(ctx context.Context, tagName string, cursor int64, limit int) ([]int64, int64, bool, error)
 }
 
+// FavoriteChecker reports whether the viewer has favorited each video, so the interaction bar can
+// render the collected state without an extra request per card. Implemented by the asset
+// repository; a feed service built without one reports every card as not favorited.
+type FavoriteChecker interface {
+	BatchIsFavorited(ctx context.Context, userID int64, videoIDs []int64) (map[int64]bool, error)
+}
+
 // AuthorDiversifier ensures authors are diversified within a feed page using a sliding window.
 type AuthorDiversifier interface {
 	// Diversify filters and reorders video candidates such that adjacent videos from the same author

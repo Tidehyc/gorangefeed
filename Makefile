@@ -1,4 +1,4 @@
-.PHONY: all up down down-v migrate migrate-down promote-admin run worker test test-race e2e vet build clean help
+.PHONY: all up down down-v migrate migrate-down promote-admin run worker test test-race e2e vet build clean seed seed-media web-build web-dev help
 
 all: vet test build
 
@@ -63,6 +63,23 @@ build:
 clean:
 	rm -rf bin/ coverage.txt coverage.html coverage.out
 
+# Seed demo data (users, videos, follows, likes, comments). Requires the compose stack.
+# Run `make seed-media` first if the clip files are missing.
+seed:
+	go run ./cmd/seed
+
+# Render the royalty-free demo clips and covers under uploads/ (ffmpeg required).
+seed-media:
+	bash scripts/seed_media.sh
+
+# Build the React client into web/dist, served by the API on `make run`.
+web-build:
+	cd web && npm install && npm run build
+
+# Run the Vite dev server (proxies /api and /media to 127.0.0.1:8080).
+web-dev:
+	cd web && npm run dev
+
 help:
 	@echo "Available Makefile targets:"
 	@echo "  make up           Start Docker Compose services (MySQL, Redis, RabbitMQ)"
@@ -79,3 +96,7 @@ help:
 	@echo "  make vet          Run go vet code analysis"
 	@echo "  make build        Build API, Worker and Migrate binaries"
 	@echo "  make clean        Remove build artifacts"
+	@echo "  make seed         Seed demo users, videos, follows and interactions"
+	@echo "  make seed-media   Render demo clips and covers with ffmpeg"
+	@echo "  make web-build    Build the React client into web/dist"
+	@echo "  make web-dev      Run the Vite dev server on :5173"

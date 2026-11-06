@@ -212,3 +212,60 @@ func TestRouter_WebRoutes(t *testing.T) {
 		t.Fatalf("expected 200 OK for GET /web/, got %d", w2.Code)
 	}
 }
+
+func TestRouter_WebSPAHistoryFallback(t *testing.T) {
+	tempDir := t.TempDir()
+	// A raw index.html exists alongside dist/: the build output must win, otherwise a developer
+	// would keep seeing the archived demo page after running `npm run build`.
+	if err := os.WriteFile(filepath.Join(tempDir, "index.html"), []byte("LEGACY"), 0644); err != nil {
+		t.Fatalf("write legacy index: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "dist", "assets"), 0755); err != nil {
+		t.Fatalf("mkdir dist: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "dist", "index.html"), []byte("SPA INDEX"), 0644); err != nil {
+		t.Fatalf("write spa index: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "dist", "assets", "app.js"), []byte("console.log(1)"), 0644); err != nil {
+		t.Fatalf("write asset: %v", err)
+	}
+
+	r := NewRouter(DependencyChecks{})
+	MountWebRoutes(r, tempDir)
+
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+
+	if w := get("/"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "SPA INDEX") {
+		t.Fatalf("expected / to serve the built app, got %d %q", w.Code, w.Body.String())
+	}
+
+	// The whole point of the fallback: client-side routes survive a hard refresh.
+	for _, path := range []string{"/user/12", "/login", "/tag/%E6%97%85%E8%A1%8C", "/settings"} {
+		w := get(path)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "SPA INDEX") {
+			t.Fatalf("expected %s to fall back to index.html, got %d %q", path, w.Code, w.Body.String())
+		}
+	}
+
+	if w := get("/assets/app.js"); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "console.log") {
+		t.Fatalf("expected the asset to be served, got %d", w.Code)
+	}
+
+	// A missing asset must not come back as HTML with status 200.
+	if w := get("/assets/missing.js"); w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for a missing asset, got %d", w.Code)
+	}
+
+	// An unknown API path is an API error, not the SPA shell.
+	w := get("/api/v1/does-not-exist")
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for an unknown API route, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "not_found") {
+		t.Fatalf("expected a JSON error body for an unknown API route, got %q", w.Body.String())
+	}
+}

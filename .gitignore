@@ -43,3 +43,10 @@ coverage.out
 /tmp/
 *.log
 logs/
+
+# Frontend build output and dependencies
+/web/node_modules/
+/web/dist/
+
+# OS / desktop trash directories
+.Trash-*/

@@ -82,10 +82,11 @@ type FeedAuthor struct {
 
 // FeedStat provides video engagement metrics.
 type FeedStat struct {
-	VideoID      int64 `json:"video_id"`
-	LikeCount    int64 `json:"like_count"`
-	CommentCount int64 `json:"comment_count"`
-	ViewCount    int64 `json:"view_count"`
+	VideoID       int64 `json:"video_id"`
+	LikeCount     int64 `json:"like_count"`
+	CommentCount  int64 `json:"comment_count"`
+	ViewCount     int64 `json:"view_count"`
+	FavoriteCount int64 `json:"favorite_count"`
 }
 
 // FeedCard stores static display properties for a video in the feed.
@@ -115,6 +116,8 @@ type FeedItem struct {
 	Stats       FeedStat   `json:"stats"`
 	IsLiked     bool       `json:"is_liked"`
 	IsFollowed  bool       `json:"is_followed"`
+	// IsFavorited is viewer-scoped like IsLiked: false for guests, batch-loaded for users.
+	IsFavorited bool `json:"is_favorited"`
 	// Tags carries display names so the client can render topic chips without parsing the
 	// description. Empty when the video has no tags.
 	Tags []string `json:"tags,omitempty"`

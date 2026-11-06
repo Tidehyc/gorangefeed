@@ -108,7 +108,8 @@ func main() {
 	// deletion needs it to hide the author's content.
 	videoRepo := persistencevideo.NewRepository(db)
 	accountSvc := serviceaccount.NewService(accountRepo, tokenStore, jwtMgr, cfg.JWT,
-		serviceaccount.WithVideoHider(videoRepo))
+		serviceaccount.WithVideoHider(videoRepo),
+		serviceaccount.WithProfileStats(persistenceaccount.NewProfileStatsRepository(db)))
 	accountHandler := httpaccount.NewHandler(accountSvc, jwtMgr, avatarStorage)
 
 	// 5. Assemble Video Domain & Storage
@@ -141,6 +142,9 @@ func main() {
 	relationHandler := httprelation.NewHandler(relationSvc)
 
 	// 8. Assemble Feed Domain & Caches
+	// The favorite repository is shared by the feed (viewer-scoped is_favorited on every card)
+	// and the asset domain (favorite folders), so it is constructed before both.
+	favoriteRepo := persistenceasset.NewFavoriteRepository(db)
 	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
 	timelineRepo := persistencefeed.NewTimelineStore(rdb)
 	hotStore := persistencefeed.NewHotStore(rdb)
@@ -160,6 +164,7 @@ func main() {
 		servicefeed.WithHotTimelineStore(hotStore),
 		servicefeed.WithRecommendDependencies(recallEngine, diversifier),
 		servicefeed.WithTagDependencies(tagRepo, tagRepo),
+		servicefeed.WithFavoriteChecker(favoriteRepo),
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 
@@ -204,7 +209,6 @@ func main() {
 	creatorHandler := httpcreator.NewHandler(creatorSvc)
 
 	// 8.8 Assemble User Asset Center Domain (Favorites & Watch History)
-	favoriteRepo := persistenceasset.NewFavoriteRepository(db)
 	historyRepo := persistenceasset.NewHistoryRepository(db, rdb)
 	assetSvc, err := serviceasset.NewService(favoriteRepo, historyRepo, videoRepo)
 	if err != nil {
