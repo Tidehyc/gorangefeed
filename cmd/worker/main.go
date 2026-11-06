@@ -155,6 +155,41 @@ func main() {
 
 	// 8. Initialize RabbitMQ Consumer for Following Feed Fanout
 	deduplicator := rabbitmq.NewDeduplicator(db)
+
+	// consumed_events retention: a marker is only useful for as long as the broker might redeliver
+	// the same message. Older rows are dead weight that grows without bound.
+	go func() {
+		const (
+			retention     = 7 * 24 * time.Hour
+			sweepInterval = time.Hour
+		)
+		purge := func() {
+			purgeCtx, purgeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer purgeCancel()
+			removed, err := deduplicator.PurgeConsumedBefore(purgeCtx, time.Now().Add(-retention))
+			if err != nil {
+				l.Warn("failed to purge consumed_events", "error", err)
+				return
+			}
+			if removed > 0 {
+				l.Info("purged consumed_events rows past retention", "rows", removed, "retention", retention.String())
+			}
+		}
+
+		purge()
+		purgeTicker := time.NewTicker(sweepInterval)
+		defer purgeTicker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				l.Info("consumed_events purger loop exiting")
+				return
+			case <-purgeTicker.C:
+				purge()
+			}
+		}
+	}()
+
 	relationRepo := persistencerelation.NewRepository(db)
 	followingRepo := persistencefeed.NewFollowingStore(rdb, db)
 	fanoutSvc, err := servicefeed.NewFanoutService(relationRepo, followingRepo, deduplicator)

@@ -23,6 +23,11 @@ type Deduplicator interface {
 
 	// IsConsumed checks if an event has already been consumed.
 	IsConsumed(ctx context.Context, eventID string) (bool, error)
+
+	// PurgeConsumedBefore deletes markers consumed strictly before cutoff and returns the number of
+	// rows removed. Markers are only needed to cover the broker's redelivery window, so keeping
+	// them forever is dead weight.
+	PurgeConsumedBefore(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 type gormDeduplicator struct {
@@ -102,4 +107,20 @@ func (d *gormDeduplicator) IsConsumed(ctx context.Context, eventID string) (bool
 	}
 
 	return count > 0, nil
+}
+
+func (d *gormDeduplicator) PurgeConsumedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	if cutoff.IsZero() {
+		return 0, errors.New("purge cutoff cannot be zero")
+	}
+
+	result := d.db.WithContext(ctx).Exec(
+		"DELETE FROM consumed_events WHERE consumed_at < ?",
+		cutoff,
+	)
+	if result.Error != nil {
+		return 0, fmt.Errorf("failed to purge consumed events before %s: %w", cutoff.Format(time.RFC3339), result.Error)
+	}
+
+	return result.RowsAffected, nil
 }

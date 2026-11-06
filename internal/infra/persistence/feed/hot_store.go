@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -13,7 +14,25 @@ import (
 const (
 	hotMinuteKeyPrefix   = "feed:hot:minute:"
 	hotSnapshotKeyPrefix = "feed:hot:window:"
+	hotAppliedKeyPrefix  = "feed:hot:applied:"
+	// hotAppliedGuardTTL bounds how long an event ID is remembered as "already scored". It has to
+	// outlive the delivery-retry window, not the score itself, so a redelivered engagement event
+	// cannot be counted twice.
+	hotAppliedGuardTTL = 7 * 24 * time.Hour
 )
+
+// applyOnceScript sets the per-event guard and applies the score delta in one atomic step, so a
+// redelivery can never both skip the guard and increment the score.
+// KEYS[1]: minute bucket ZSet, KEYS[2]: per-event guard key
+// ARGV[1]: delta, ARGV[2]: video id member, ARGV[3]: guard TTL seconds, ARGV[4]: bucket TTL seconds
+var applyOnceScript = redis.NewScript(`
+if redis.call('SET', KEYS[2], '1', 'NX', 'EX', tonumber(ARGV[3])) == false then
+	return 0
+end
+redis.call('ZINCRBY', KEYS[1], tonumber(ARGV[1]), ARGV[2])
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
+return 1
+`)
 
 type hotStore struct {
 	rdb redis.Cmdable
@@ -60,6 +79,42 @@ func (s *hotStore) IncrScore(ctx context.Context, videoID int64, delta float64, 
 		return fmt.Errorf("redis zincrby hot score error: %w", err)
 	}
 	return nil
+}
+
+// ApplyEngagementOnce applies the delta to the target minute bucket at most once per event ID.
+// The guard and the ZINCRBY run inside one Lua script: a redelivery either sees the guard and
+// skips, or sets it and scores — it cannot do neither or both.
+func (s *hotStore) ApplyEngagementOnce(ctx context.Context, eventID string, videoID int64, delta float64, occurredAt time.Time) (bool, error) {
+	if eventID == "" {
+		return false, errors.New("event ID cannot be empty")
+	}
+	if videoID <= 0 {
+		return false, domainfeed.ErrInvalidVideoID
+	}
+	if delta == 0 {
+		return false, nil
+	}
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+
+	bucketKey := MinuteBucketKey(occurredAt)
+	guardKey := hotAppliedKeyPrefix + eventID
+
+	res, err := applyOnceScript.Run(
+		ctx,
+		s.rdb,
+		[]string{bucketKey, guardKey},
+		delta,
+		strconv.FormatInt(videoID, 10),
+		int64(hotAppliedGuardTTL.Seconds()),
+		int64(domainfeed.HotMinuteBucketTTL.Seconds()),
+	).Int()
+	if err != nil {
+		return false, fmt.Errorf("redis apply engagement once error: %w", err)
+	}
+
+	return res == 1, nil
 }
 
 // MergeWindow aggregates sliding minute buckets into a stable snapshot and purges non-positive scores.

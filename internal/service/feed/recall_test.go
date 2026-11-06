@@ -17,6 +17,12 @@ func (m *mockHotStoreForRecall) IncrScore(ctx context.Context, videoID int64, de
 	return nil
 }
 
+// ApplyEngagementOnce is part of the store contract but belongs to the write path; these tests
+// only exercise recall.
+func (m *mockHotStoreForRecall) ApplyEngagementOnce(ctx context.Context, eventID string, videoID int64, delta float64, occurredAt time.Time) (bool, error) {
+	return true, nil
+}
+
 func (m *mockHotStoreForRecall) MergeWindow(ctx context.Context, asOf time.Time, windowMinutes int) (string, error) {
 	return "test_snapshot_key", nil
 }

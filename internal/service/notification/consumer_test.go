@@ -3,6 +3,7 @@ package notification_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -38,6 +39,10 @@ func (m *mockDeduplicator) ExecuteWithDeduplication(ctx context.Context, eventID
 
 func (m *mockDeduplicator) IsConsumed(ctx context.Context, eventID string) (bool, error) {
 	return m.consumed[eventID], nil
+}
+
+func (m *mockDeduplicator) PurgeConsumedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
 }
 
 func TestConsumer_HandleLikeEvent(t *testing.T) {
@@ -260,5 +265,62 @@ func TestConsumer_Deduplication(t *testing.T) {
 	}
 	if len(repo.items) != 1 {
 		t.Fatalf("expected still 1 notification after duplicate delivery, got %d", len(repo.items))
+	}
+}
+
+// A persistence failure must leave the event unmarked. Marking first is what turned a transient
+// MySQL error into a notification the recipient never saw: the redelivery skipped it as consumed.
+func TestConsumer_ProcessingFailure_DoesNotMarkConsumed(t *testing.T) {
+	repo := newMockRepo()
+	repo.createErr = errors.New("mysql is unreachable")
+	dedup := newMockDeduplicator()
+
+	consumer, err := servicenotification.NewConsumer(repo, nil, dedup, nil)
+	if err != nil {
+		t.Fatalf("failed to create consumer: %v", err)
+	}
+
+	ctx := context.Background()
+	const eventID = "ev_persist_fail_1"
+	payload, _ := json.Marshal(servicenotification.LikeEventPayload{
+		UserID:   200,
+		VideoID:  500,
+		AuthorID: 100,
+	})
+
+	if err := consumer.HandleEvent(ctx, eventID, infrarabbitmq.RoutingKeyInteractionLiked, payload); err == nil {
+		t.Fatalf("expected HandleEvent to report the persistence failure")
+	}
+	if consumed, _ := dedup.IsConsumed(ctx, eventID); consumed {
+		t.Fatalf("event %s was marked consumed even though nothing was persisted", eventID)
+	}
+
+	// Redelivery once MySQL recovers persists the notification.
+	repo.createErr = nil
+	if err := consumer.HandleEvent(ctx, eventID, infrarabbitmq.RoutingKeyInteractionLiked, payload); err != nil {
+		t.Fatalf("redelivery failed: %v", err)
+	}
+	if len(repo.items) != 1 {
+		t.Fatalf("expected the redelivery to persist 1 notification, got %d", len(repo.items))
+	}
+	if consumed, _ := dedup.IsConsumed(ctx, eventID); !consumed {
+		t.Fatalf("expected the event to be marked consumed after a successful persist")
+	}
+}
+
+// A payload that cannot be parsed will never parse on redelivery either.
+func TestConsumer_MalformedPayload_IsPermanent(t *testing.T) {
+	dedup := newMockDeduplicator()
+	consumer, err := servicenotification.NewConsumer(newMockRepo(), nil, dedup, nil)
+	if err != nil {
+		t.Fatalf("failed to create consumer: %v", err)
+	}
+
+	err = consumer.HandleEvent(context.Background(), "ev_bad_payload", infrarabbitmq.RoutingKeyInteractionLiked, []byte(`{"user_id":`))
+	if err == nil {
+		t.Fatalf("expected an error for a malformed payload")
+	}
+	if !infrarabbitmq.IsPermanent(err) {
+		t.Fatalf("expected a permanent error for a malformed payload, got %v", err)
 	}
 }

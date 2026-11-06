@@ -47,29 +47,30 @@ func NewHotScoreConsumer(
 
 // HandleEngagementEvent processes an interaction or playback event, applying the corresponding
 // engagement score delta to the target video's 1-minute bucket.
+//
+// The score is applied before the event is recorded as consumed, and the apply itself is guarded
+// per event ID (ApplyEngagementOnce). Ordering matters: marking first meant a failure after the
+// mark turned into a silent drop on redelivery, because the redelivery saw the marker and skipped
+// the work. Applying first means a redelivery is at worst a no-op, never a lost event.
 func (c *HotScoreConsumer) HandleEngagementEvent(ctx context.Context, eventID string, routingKey string, payload []byte) error {
 	if eventID == "" {
 		return errors.New("event ID cannot be empty")
 	}
 
-	// 1. Transactional deduplication via consumed_events
-	isNew, err := c.deduplicator.MarkConsumed(ctx, eventID)
-	if err != nil {
-		return fmt.Errorf("deduplication check failed: %w", err)
-	}
-	if !isNew {
-		// Event was already consumed previously -> idempotent skip
-		return nil
+	// 1. Only recognized engagement events carry a score delta.
+	delta, ok := engagementDelta(routingKey)
+	if !ok {
+		// Not one of ours: record it so the broker stops redelivering, and stop.
+		return c.markConsumed(ctx, eventID)
 	}
 
 	// 2. Parse payload
 	var p EngagementPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("failed to unmarshal engagement payload: %w", err)
+		return rabbitmq.Permanent(fmt.Errorf("failed to unmarshal engagement payload: %w", err))
 	}
 	if p.VideoID <= 0 {
-		// Non-video event or malformed payload, ignore safely
-		return nil
+		return rabbitmq.Permanent(fmt.Errorf("invalid engagement payload: video_id=%d", p.VideoID))
 	}
 
 	// 3. Determine event timestamp
@@ -84,34 +85,44 @@ func (c *HotScoreConsumer) HandleEngagementEvent(ctx context.Context, eventID st
 		occurredAt = time.Now().UTC()
 	}
 
-	// 4. Determine score delta based on routing key
-	var delta float64
+	// 4. Apply the delta at most once per event, atomically (guard + ZINCRBY in one script).
+	if _, err := c.hotStore.ApplyEngagementOnce(ctx, eventID, p.VideoID, delta, occurredAt); err != nil {
+		return fmt.Errorf("failed to apply hot score for video %d: %w", p.VideoID, err)
+	}
+
+	// 5. Record consumption only now that the score is in place.
+	return c.markConsumed(ctx, eventID)
+}
+
+// markConsumed records the event in consumed_events. A failure here is retryable: the redelivery
+// re-runs an idempotent apply and tries to mark again.
+func (c *HotScoreConsumer) markConsumed(ctx context.Context, eventID string) error {
+	if _, err := c.deduplicator.MarkConsumed(ctx, eventID); err != nil {
+		return fmt.Errorf("failed to mark event %s as consumed: %w", eventID, err)
+	}
+	return nil
+}
+
+// engagementDelta maps a routing key to its score delta.
+func engagementDelta(routingKey string) (float64, bool) {
 	switch routingKey {
 	case rabbitmq.RoutingKeyInteractionLiked:
-		delta = domainfeed.ScoreLikeDelta
+		return domainfeed.ScoreLikeDelta, true
 	case rabbitmq.RoutingKeyInteractionUnliked:
-		delta = domainfeed.ScoreUnlikeDelta
+		return domainfeed.ScoreUnlikeDelta, true
 	case rabbitmq.RoutingKeyInteractionCommented:
-		delta = domainfeed.ScoreCommentDelta
+		return domainfeed.ScoreCommentDelta, true
 	case rabbitmq.RoutingKeyInteractionCommentDelete:
-		delta = domainfeed.ScoreCommentDeleteDelta
+		return domainfeed.ScoreCommentDeleteDelta, true
 	case rabbitmq.RoutingKeyVideoViewed:
-		delta = domainfeed.ScorePlayDelta
+		return domainfeed.ScorePlayDelta, true
 	case rabbitmq.RoutingKeyVideoCompleted:
-		delta = domainfeed.ScoreCompleteDelta
+		return domainfeed.ScoreCompleteDelta, true
 	case rabbitmq.RoutingKeyInteractionFavorited:
-		delta = domainfeed.ScoreFavoriteDelta
+		return domainfeed.ScoreFavoriteDelta, true
 	case rabbitmq.RoutingKeyInteractionUnfavorited:
-		delta = domainfeed.ScoreUnfavoriteDelta
+		return domainfeed.ScoreUnfavoriteDelta, true
 	default:
-		// Unrecognized engagement event, skip
-		return nil
+		return 0, false
 	}
-
-	// 5. Apply score change to the target minute bucket in Redis
-	if err := c.hotStore.IncrScore(ctx, p.VideoID, delta, occurredAt); err != nil {
-		return fmt.Errorf("failed to increment hot score for video %d: %w", p.VideoID, err)
-	}
-
-	return nil
 }

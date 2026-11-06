@@ -30,7 +30,7 @@
 | **已赞作品列表与游标分页** | 使用 `JOIN likes ON likes.video_id = videos.id WHERE likes.account_id = ? ORDER BY likes.created_at DESC LIMIT 200`，硬编码 200 条上限，无游标分页机制。 | 无已赞作品流。 | **单调 ID 游标流**：在 `likes` 表建立 `(user_id, id DESC)` 专属索引，采用单调递减的主键 ID 作为游标（`likes.id < cursor`）关联视频实体倒序翻页，支持无界、稳定且防深分页的已赞列表流。 |
 | **评论发布幂等与层级回复** | 依赖 `commentMQ` 异步消费写入 DB，写接口仅返回 accepted，前端无法即时拿到评论实体；缺少客户端幂等防重；仅支持单层平铺评论。 | 无评论模块。 | **同步落库 + 客户端 Idempotency 唯一索引**：写请求同步完成权威落库并即刻返回新评论实体；通过 `UNIQUE (user_id, idempotency_key)` 约束拦截客户端超时重试；支持基于 `parent_id` 的二级单层回复与作者软删除原子递减计数；支持最新时间流与热评复合游标双模分页。 |
 | **用户关系与统计（关注/粉丝）** | 无用户关系与关系统计模块。 | **【优点】** 采用领域驱动设计划分 `relation` 边界，独立 `user_relation_stat` 表隔离行锁；<br>**【短板】** 关系表采用软状态 `status=1/2` 导致索引膨胀，游标采用复合 Base64 时间戳易发生同秒碰撞。 | **【吸纳长处并增强】** 采纳关系与统计垂直分离架构；优化为物理增删配合单调自增 ID 游标（`follows.id < cursor`），杜绝软状态历史数据膨胀与毫秒时钟碰撞；支持单次联合探测双方关系与一键互粉好友判定（`is_friend=true`）。 |
-| **分布式最终一致性 (Outbox)** | `StartOutboxPoller` 无分布式租约机制（多 Worker 实例并发扫描同一批待处理记录导致严重重复投递）；发布成功后直接物理 `Delete` 记录，缺少审计与终态；失败无指数退避，死循环轮询；消费端无去重。 | 无本地消息表与异步 Worker 解耦机制。 | **抢占式分布式租约 + 消费幂等**：<br>1. `outbox` 本地消息表随业务事务原子落库；<br>2. Worker 基于 `lease_token` 与 `lease_until` 抢占式批量拉取（防多实例重复调度），超时未确认租约自动回收；<br>3. RabbitMQ 持久化与 Publisher Confirm 确保投递；<br>4. 失败按指数退避重试（1s~10m），超限流转为 `dead` 状态；<br>5. 消费端基于 MySQL `consumed_events` 主键冲突实现精确一次（Exactly-once）语义。 |
+| **分布式最终一致性 (Outbox)** | `StartOutboxPoller` 无分布式租约机制（多 Worker 实例并发扫描同一批待处理记录导致严重重复投递）；发布成功后直接物理 `Delete` 记录，缺少审计与终态；失败无指数退避，死循环轮询；消费端无去重。 | 无本地消息表与异步 Worker 解耦机制。 | **抢占式分布式租约 + 消费幂等**：<br>1. `outbox` 本地消息表随业务事务原子落库；<br>2. Worker 基于 `lease_token` 与 `lease_until` 抢占式批量拉取（防多实例重复调度），超时未确认租约自动回收；<br>3. RabbitMQ 持久化与 Publisher Confirm 确保投递；<br>4. 失败按指数退避重试（1s~10m），超限流转为 `dead` 状态；<br>5. 消费端**先执行幂等副作用、后写 `consumed_events`**（顺序反了就变成「一次失败 = 永久丢事件」），配合 5 次重投预算与 `<queue>.dead` 死信队列，畸形消息以 `Permanent` 直送死信而不占预算。 |
 | **关注流推拉结合架构（Hybrid Fanout）** | 仅维护全局时间线，无关注流分发机制。 | 仅在文档中规划了基于关系的扩展，未落地关注流读写扩散引擎。 | **5000 粉丝分水岭推拉结合**：<br>1. **写分流**：粉丝数 < 5000 普通作者写扩散至粉丝 Redis Inbox（`feed:following:inbox:{uid}`，保留最新 800 条）；粉丝数 ≥ 5000 大 V 仅写入作者专有 Outbox（`feed:following:author:{author_id}`）；<br>2. **读聚合**：读端 Pipeline 并行拉取个人 Inbox 与关注的大 V Outbox，内存中基于优先队列多路归并排序并单调 ID 游标裁剪；<br>3. **冷启动兜底**：Redis 缓存冷启动或失效时，平滑降级回源 MySQL `follows JOIN videos` 联合索引查询。 |
 | **Feed 缓存分层与个性化装配** | 无页缓存体系，仅有视频卡片缓存。 | **【优点】** 具备分层页缓存（L1/L3/L4）；<br>**【短板】** 按用户隔离全量流或纯匿名流，导致登录态用户间无法复用缓存。 | **【吸纳长处并增强】L1 公共骨架共享 + Dynamic Hydration**：全局最新流（`scene=global`）将 L1 页缓存提升为跨所有用户共享的纯 ID 骨架（`feed:page:global:public:...`），Singleflight 进程内并发合并跨全平台用户生效；在 `hydrateFeedPage` 阶段根据登录态动态批量注入 `is_liked`、`is_followed`。 |
 
@@ -44,7 +44,8 @@
 | **000006_create_relation_tables** | `follows` | `id`, `follower_id`, `vlogger_id`, `created_at` | `UNIQUE(follower_id, vlogger_id)`：保证单向关注唯一；<br>`(vlogger_id, id DESC)`：粉丝列表单调游标分页；<br>`(follower_id, id DESC)`：关注列表单调游标分页。 |
 | | `relation_stats` | `user_id(PK)`, `following_count`, `follower_count`, `updated_at` | 垂直拆分隔离高频行级写锁，避免关注/取关阻塞账号主表。 |
 | **000007_create_outbox_tables** | `outbox` | `id`, `event_id`, `event_type`, `payload`, `status`, `attempts`, `next_retry_at`, `lease_token`, `lease_until`, `last_error`, `created_at`, `sent_at` | `UNIQUE(event_id)`：保证消息全局唯一；<br>`(status, next_retry_at, id)`：调度器批量捞取索引；<br>`(status, lease_until)`：超时租约回收索引；<br>`(lease_token)`：租约实例快速确认。 |
-| | `consumed_events` | `event_id(PK)`, `consumed_at` | 消费端事务幂等去重表，拦截重试消息的二次消费。 |
+| | `consumed_events` | `event_id(PK)`, `consumed_at` | 消费端幂等去重表，拦截重试消息的二次消费；`consumed_at` 只用于保留期清理（见 000014）。 |
+| **000014_add_consumed_events_retention_index** | `consumed_events`（加索引） | — | `(consumed_at)`：去重标记只需覆盖 broker 重投窗口（保留 7 天，worker 每小时清理），没有这条索引时 `DELETE ... WHERE consumed_at < ?` 会退化成全表扫。 |
 
 ### 2.3 核心接口与鉴权规范
 
@@ -87,7 +88,8 @@
 
 | 维度 | `feedsystem_video_go` 实现 | `GCFeed` 实现 | GoRangeFeed 优化决策（集思广益 & 落地标准） |
 |---|---|---|---|
-| **热度打分与异步驱动** | 直接在 API 进程或轻量队列消费更新 `hot:video:1m:%s`；缺少事务消息保障，存在事件丢失与重复并发风险；无负反馈打分。 | 规划了明确的分钟桶热度打分模型（点赞+3/取消-3，评论+5/删除-5，播放+0.5，完播+2），但未提供完整消费落地。 | **Outbox 事务驱动 + 全局权重矩阵 + 消费防抖**：<br>1. 点赞、评论、取消点赞等业务事件由 M4 Outbox 本地事务消息表原子落盘；<br>2. Worker `HotScoreConsumer` 消费事件并按权重执行 `ZINCRBY feed:hot:minute:{yyyyMMddHHmm}`（TTL 2小时自然衰减）；<br>3. 支持正向累加（点赞+3、评论+5、完播+2、基础播放+0.5）与逆向扣减（取消点赞-3、删除评论-5）；<br>4. 依托 `consumed_events` 事务去重表，保障热度计算不重复、不遗漏。 |
+| **热度打分与异步驱动** | 直接在 API 进程或轻量队列消费更新 `hot:video:1m:%s`；缺少事务消息保障，存在事件丢失与重复并发风险；无负反馈打分。 | 规划了明确的分钟桶热度打分模型（点赞+3/取消-3，评论+5/删除-5，播放+0.5，完播+2），但未提供完整消费落地。 | **Outbox 事务驱动 + 全局权重矩阵 + 消费防抖**：<br>1. 点赞、评论、取消点赞等业务事件由 M4 Outbox 本地事务消息表原子落盘；<br>2. Worker `HotScoreConsumer` 消费事件并按权重执行 `ZINCRBY feed:hot:minute:{yyyyMMddHHmm}`（TTL 2小时自然衰减）；<br>3. 支持正向累加（点赞+3、评论+5、完播+2、基础播放+0.5）与逆向扣减（取消点赞-3、删除评论-5）；<br>4. `ZINCRBY` 不幂等，故用事件级守卫键 `feed:hot:applied:{event_id}`（TTL 7 天）与累加打包进同一条 Lua 脚本，
+   重投不会重复加分；`consumed_events` 只作为事后的重放拦截。 |
 | **动态变分下的分页稳定性** | 请求到达时取整分钟 `Truncate(time.Minute)`，合并过去 60 个分钟桶至快照 Key `hot:video:merge:1m:%s`（TTL 2分钟），基于 `offset` 翻页。 | 采用 `window_end + offset` 快照游标分页，明确提出需过滤分值 `≤ 0` 的条目。 | **as_of + offset 稳定快照游标 + 剔除净负分**：<br>1. 客户端首次拉取时服务端对齐当前整分钟时间戳 `as_of = floor(now, 1min)`；<br>2. 服务端原子执行 `ZUNIONSTORE feed:hot:window:{as_of}` 聚合过去 60 个分钟桶，并执行 `ZREMRANGEBYSCORE dest -inf 0` 剔除无效及净负分视频；<br>3. 快照 Key 设定 2 分钟 TTL 覆盖用户翻页生命周期；<br>4. 下发透明 Base64 编码游标 `{"scene":"hot","as_of":1729700000,"offset":10}`，翻页严格沿用同一 `as_of`，彻底根治分数频繁变动导致的分页漏刷与滑重。 |
 | **推荐多路召回策略** | 仅支持单一分类或简单标签过滤（`ListByTag`），无多路召回体系。 | 规划了热门 50% + 最新 30% + 探索 20% 的三路配比，但未沉淀具体打散与管道编排。 | **三路轻量召回引擎（Multi-Source Recall）**：<br>1. **热门高质池（50%）**：从 60 分钟滑动热榜（L2 Hot Window）按分数截取高质候选；<br>2. **最新时效池（30%）**：从全局最新时间线（L2 Global Timeline）拉取最新视频；<br>3. **探索随机池（20%）**：从 72h 活跃池中基于随机游标采样，提升冷启动内容曝光几率；<br>4. 候选不足时各路自动互补降级，保证分页填满。 |
 | **曝光去重与生命周期** | 无曝光去重机制，用户反复刷新易刷到相同视频。 | 规划了 `reco_exposure_log` 与 `exposures` 聚合表，并建议在候选进入排序前过滤。 | **Redis Set 72h 曝光去重集合 + 播放异步沉淀**：<br>1. 端侧播放或曝光上报（`POST /api/v1/videos/:videoId/view`）时，异步将 `video_id` 写入 Redis 集合 `reco:exposed:{uid}`（TTL 72 小时）；<br>2. 推荐流拉取时，Pipeline 批量调用 `SMISMEMBER` 高速探测候选集，秒级剔除已曝光内容；<br>3. 游客匿名请求免去重，登录用户个性化生效。 |
@@ -100,6 +102,9 @@
 - **分钟热度桶**：`feed:hot:minute:{yyyyMMddHHmm}`（ZSet，member=video_id, score=delta，TTL = 2 小时，自然衰减）
 - **热榜快照聚合键**：`feed:hot:window:{as_of}`（ZSet，member=video_id, score=total_score，TTL = 2 分钟，翻页专用）
 - **近期曝光去重集合**：`reco:exposed:{uid}`（Set，member=video_id，TTL = 72 小时）
+- **互动事件打分守卫**：`feed:hot:applied:{event_id}`（String，TTL = 7 天）。`ZINCRBY` 不幂等，重投会把同一次点赞算两遍；
+  守卫与加分在同一条 Lua 脚本里执行，保证「要么守卫+加分都成，要么都没发生」。
+  两步写（先 `SET NX` 再 `ZINCRBY`）会造出新的丢事件窗口：守卫落下、加分失败，重投直接跳过。
 
 #### 2. 互动热度打分权重矩阵
 | 行为事件 | 事件类型 | 分值变更（Delta） | 业务说明 |
@@ -170,7 +175,8 @@ flowchart TD
 | 维度 | `feedsystem_video_go` 实现 | `GCFeed` 实现 | GoRangeFeed M5 优化决策（取长补短 & 升维演进） |
 |---|---|---|---|
 | **消息实体与领域抽象 (Domain Model)** | 实体结构扁平（`RecipientID`, `SenderID`, `Type`, `TargetID`, `Content`）；将点对点私信与通知混在不同包，领域职责模糊；直接在 GORM 模型上操作，无领域状态机与富文本规则。 | **【优点】** 采用 DDD 领域实体 `Message`，封装接收人、类型、标题、内容、`EventID`，并引入 `ActorID/Nickname/Avatar` 快照；<br>**【短板】** 缺少业务跳转目标信息（如视频 ID、评论 ID），私信与系统通知边界混淆。 | **【吸纳长处并增强】规范化 `Notification` 聚合根与业务元数据**：<br>1. 提炼通知实体：`ID`, `RecipientID`, `ActorID`, `Type` (`like`, `comment`, `follow`, `mention`, `system`), `TargetType` (`video`, `comment`, `user`), `TargetID`, `Title`, `Content`, `EventID`, `IsRead`, `CreatedAt`, `ReadAt`；<br>2. 领域层零外部依赖，严格封装 `MarkRead()` 状态机与富文本截断/校验规则；<br>3. 关联 Actor 动态装配与卡片摘要回填。 |
-| **事件驱动与消费去重 (Event & Idempotency)** | 在 Worker 中消费 RabbitMQ，查出目标作者后直接 `db.Create`；**无事件去重与幂等表**，网络重试或 Worker 重启时发生大量重复通知；无事务 Outbox 保障。 | **【优点】** 表级唯一索引 `uk_user_event(user_id, event_id)` 杜绝同一事件生成多条消息；<br>**【短板】** 依赖外部直接调 `/internal/messages` HTTP 接口写入，非消息队列驱动，高并发写会被阻塞。 | **【集两家之长】Outbox 事务解耦 + 消费端双层幂等**：<br>1. 复用 M4 Outbox 可靠事件（点赞 `interaction.liked`、评论 `interaction.commented`、关注 `relation.followed`）；<br>2. RabbitMQ Topic 消费；<br>3. 消费端基于 `consumed_events` 事务去重表 + `notifications` 联合唯一键 `uk_recipient_event (recipient_id, event_id)` 双重拦截重试投递，确保精确一次；<br>4. 自身操作严格过滤不发通知（`actor_id == recipient_id`）。 |
+| **事件驱动与消费去重 (Event & Idempotency)** | 在 Worker 中消费 RabbitMQ，查出目标作者后直接 `db.Create`；**无事件去重与幂等表**，网络重试或 Worker 重启时发生大量重复通知；无事务 Outbox 保障。 | **【优点】** 表级唯一索引 `uk_user_event(user_id, event_id)` 杜绝同一事件生成多条消息；<br>**【短板】** 依赖外部直接调 `/internal/messages` HTTP 接口写入，非消息队列驱动，高并发写会被阻塞。 | **【集两家之长】Outbox 事务解耦 + 消费端双层幂等**：<br>1. 复用 M4 Outbox 可靠事件（点赞 `interaction.liked`、评论 `interaction.commented`、关注 `relation.followed`）；<br>2. RabbitMQ Topic 消费；<br>3. 消费端**先落库、后写 `consumed_events`**，配合 `uk_recipient_event (recipient_id, event_id)` 与 `ON CONFLICT DO NOTHING`
+   双重拦截重试投递：标记在业务成功之后才写，所以「落库失败 → 重投 → 补齐」是通的，不会变成永久丢通知；<br>4. 自身操作严格过滤不发通知（`actor_id == recipient_id`）。 |
 | **评论 `@提及` 用户通知 (Mention Parsing)** | 完全不支持。 | 完全不支持。 | **【全新突破】正则解析 `@username` 异步派发（FR-NOT-07）**：<br>1. 消费评论事件时，正则提取所有 `@([a-zA-Z0-9_]+)` 用户名（去重并限制单条评论最多 10 人）；<br>2. 批量探测用户名对应的 `user_id`；<br>3. 过滤作者本人及视频作者（避免重复通知）；<br>4. 批量派发 `mention` 类型系统通知并触发 SSE 推送。 |
 | **分布式集群推流与频道选型 (Cluster SSE & Pub/Sub)** | **【严重缺陷】** 仅支持单机单进程内存推流；Worker 与 API 分离或横向扩容时推送必定静默丢失；无背压缓冲控制。 | 完全无实时推流能力，仅支持无状态客户端 HTTP 短轮询。 | **【吸纳长处并解耦】双层广播解耦（Redis Pub/Sub + API 本地 Hub）**：<br>1. 抽象通用 `Broadcaster` 接口（解耦驱动源，支持单机内存与 Redis 集群）；<br>2. Worker/API 在产生通知后统一向集中式主题 `channel.gorangefeed.notifications` 广播轻量信令；<br>3. 各 API 节点仅保持 1 条常驻 Redis 连接，收到信令后通过本地内存 `clients[recipient_id]` O(1) 匹配与本地分发，天然支持 N 节点水平扩容，杜绝订阅风暴。 |
 | **弱网重连与断线补拉 (Last-Event-ID Catch-up)** | **【严重缺陷】** 完全不支持。断开重连期间产生的所有通知全部丢失，只能手动调列表接口刷新。 | 无推送。游标分页按时间倒序。 | **【弥补短板】60s 重叠窗口 + 复合游标严格补拉**：<br>1. SSE 事件携带标准 `id: {createdAtMs}:{id}`；<br>2. 客户端断线重连携带 `Last-Event-ID`（或 Query `last_event_id`）；<br>3. 服务端解析时间戳回退 60 秒（`lastTime - 60s`），从 DB 检索 `(created_at, id) > (cursorTime-60s, cursorID)` 未读记录；<br>4. 内存去重后在握手成功后即刻优先补推历史事件，再接入实时通道，做到网络抖动 100% 不丢通知。 |

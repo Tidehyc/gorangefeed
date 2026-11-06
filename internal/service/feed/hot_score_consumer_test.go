@@ -3,6 +3,7 @@ package feed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -11,9 +12,11 @@ import (
 )
 
 type mockHotStoreForConsumer struct {
-	mu     sync.Mutex
-	scores map[int64]float64
-	calls  []scoreCall
+	mu       sync.Mutex
+	scores   map[int64]float64
+	calls    []scoreCall
+	applied  map[string]bool
+	applyErr error
 }
 
 type scoreCall struct {
@@ -31,6 +34,27 @@ func (m *mockHotStoreForConsumer) IncrScore(ctx context.Context, videoID int64, 
 	m.scores[videoID] += delta
 	m.calls = append(m.calls, scoreCall{videoID: videoID, delta: delta, occurredAt: occurredAt})
 	return nil
+}
+
+// ApplyEngagementOnce mirrors the Lua guard in the Redis store: the same event ID scores at most once.
+func (m *mockHotStoreForConsumer) ApplyEngagementOnce(ctx context.Context, eventID string, videoID int64, delta float64, occurredAt time.Time) (bool, error) {
+	m.mu.Lock()
+	if m.applyErr != nil {
+		err := m.applyErr
+		m.mu.Unlock()
+		return false, err
+	}
+	if m.applied == nil {
+		m.applied = make(map[string]bool)
+	}
+	if m.applied[eventID] {
+		m.mu.Unlock()
+		return false, nil
+	}
+	m.applied[eventID] = true
+	m.mu.Unlock()
+
+	return true, m.IncrScore(ctx, videoID, delta, occurredAt)
 }
 
 func (m *mockHotStoreForConsumer) MergeWindow(ctx context.Context, asOf time.Time, windowMinutes int) (string, error) {
@@ -197,10 +221,14 @@ func TestHotScoreConsumer_ValidationAndEdgeCases(t *testing.T) {
 		t.Fatalf("expected error for empty event ID")
 	}
 
-	// Zero video ID payload should be safely skipped
+	// Zero video ID payload is unusable: it must fail permanently (so the broker dead-letters it
+	// instead of redelivering forever) and must not touch any score.
 	err = consumer.HandleEngagementEvent(ctx, "ev_zero_vid", rabbitmq.RoutingKeyInteractionLiked, []byte(`{"video_id":0}`))
-	if err != nil {
-		t.Fatalf("expected nil for zero video ID payload, got %v", err)
+	if err == nil {
+		t.Fatalf("expected an error for zero video ID payload")
+	}
+	if !rabbitmq.IsPermanent(err) {
+		t.Fatalf("expected a permanent error for zero video ID payload, got %v", err)
 	}
 	if len(mockStore.calls) != 0 {
 		t.Fatalf("expected 0 IncrScore calls, got %d", len(mockStore.calls))
@@ -210,5 +238,43 @@ func TestHotScoreConsumer_ValidationAndEdgeCases(t *testing.T) {
 	err = consumer.HandleEngagementEvent(ctx, "ev_unknown_rk", "unknown.routing.key", []byte(`{"video_id":123}`))
 	if err != nil {
 		t.Fatalf("expected nil for unknown routing key, got %v", err)
+	}
+}
+
+// A failed score write must leave the event unmarked. Marking first is what turned a transient
+// Redis error into a silently lost engagement: the redelivery saw the marker and skipped the work.
+func TestHotScoreConsumer_ApplyFailure_DoesNotMarkConsumed(t *testing.T) {
+	mockStore := &mockHotStoreForConsumer{applyErr: errors.New("redis is unreachable")}
+	mockDedup := &mockDeduplicatorForFanout{}
+
+	consumer, err := NewHotScoreConsumer(mockStore, mockDedup)
+	if err != nil {
+		t.Fatalf("failed to create HotScoreConsumer: %v", err)
+	}
+
+	ctx := context.Background()
+	const eventID = "ev_apply_fail_1"
+	payload, _ := json.Marshal(EngagementPayload{VideoID: 3003})
+
+	if err := consumer.HandleEngagementEvent(ctx, eventID, rabbitmq.RoutingKeyInteractionLiked, payload); err == nil {
+		t.Fatalf("expected HandleEngagementEvent to report the apply failure")
+	}
+	if consumed, _ := mockDedup.IsConsumed(ctx, eventID); consumed {
+		t.Fatalf("event %s was marked consumed even though the score was never applied", eventID)
+	}
+
+	// Redelivery once the store recovers applies the delta exactly once.
+	mockStore.mu.Lock()
+	mockStore.applyErr = nil
+	mockStore.mu.Unlock()
+
+	if err := consumer.HandleEngagementEvent(ctx, eventID, rabbitmq.RoutingKeyInteractionLiked, payload); err != nil {
+		t.Fatalf("redelivery failed: %v", err)
+	}
+	if got := mockStore.scores[3003]; got != 3.0 {
+		t.Fatalf("expected the redelivery to score 3.0, got %f", got)
+	}
+	if consumed, _ := mockDedup.IsConsumed(ctx, eventID); !consumed {
+		t.Fatalf("expected the event to be marked consumed after a successful apply")
 	}
 }

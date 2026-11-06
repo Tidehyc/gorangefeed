@@ -210,7 +210,9 @@ flowchart TD
      - 删除评论 `interaction.comment_deleted`：`-5.0`
      - 视频完播 `video.completed`：`+2.0`
      - 基础播放 `video.viewed`：`+0.5`
-   - **消费幂等与防抖**：依托消费端去重表（`consumed_events`）保障每条业务事实仅计算一次分值。
+   - **消费幂等与防抖**：`ZINCRBY` 本身不幂等，同一次点赞被重投就会算两遍分值。因此每条事件先在
+     `feed:hot:applied:{event_id}` 上抢占守卫、再累加，两步在同一条 Lua 脚本里完成（`ApplyEngagementOnce`）；
+     事后才写 `consumed_events` 作为重放拦截。
 2. **读路径与稳定分页快照（as_of + offset 机制）**：
    - **动态变分痛点**：高频点赞和播放导致视频得分每秒都在变动，传统 `(score, id)` 游标在翻页时会导致视频位次上升或下降，造成严重的“翻页重复”或“翻页漏刷”。
    - **稳定快照方案**：
@@ -343,8 +345,14 @@ CREATE TABLE outbox (
    ```
 4. **MQ 确认与状态终结**：投递成功后置为 `sent`；若投递失败，按指数退避计算 `next_retry_at`（1s/5s/25s/2m/10m）；重试超过 10 次置为 `dead` 并触发监控告警。
 5. **消费端双层幂等**：
-   - **MySQL 层面**：消费事务中首行执行 `INSERT INTO consumed_events (event_id) VALUES (?)`，主键冲突则直接回滚跳过。
-   - **Redis 层面**：所有 Redis 派生操作必须天然幂等（如使用 `SET`、`ZADD`，严禁在消费逻辑中使用无边界的 `INCR` 累加）。
+   - **MySQL 层面**：**先执行业务副作用，成功后再 `INSERT INTO consumed_events (event_id) VALUES (?)`**。
+     标记是收尾动作而不是开场动作 —— 先标记的话，业务失败重投时会被「已消费」挡掉，事件永久丢失。
+     业务侧本身要幂等：`ZADD` 天然幂等，`notifications` 靠 `UNIQUE(recipient_id, event_id)` + `ON CONFLICT DO NOTHING`。
+   - **Redis 层面**：所有 Redis 派生操作必须天然幂等（如使用 `SET`、`ZADD`）。不可避免的累加（`ZINCRBY` 热度打分）
+     用事件级守卫键 `feed:hot:applied:{event_id}`，且**守卫与累加必须在同一条 Lua 脚本里**完成，
+     否则「守卫成功、累加失败」会造出与先标记同款的丢事件窗口。
+   - **重投预算**：同一条消息最多重投 5 次，超限或遇到 `Permanent` 错误（畸形 payload）转投 `<queue>.dead`，
+     避免毒消息无限回队阻塞后面的消息。
 
 ---
 
@@ -378,7 +386,7 @@ CREATE TABLE outbox (
 | **M4** | `follows` | id, follower_id, vlogger_id, created_at | UNIQUE(`follower_id`, `vlogger_id`)<br>(`vlogger_id`, `id` DESC)<br>(`follower_id`, `id` DESC) | 关注关系表。支持粉丝列表与关注列表单调 ID 游标翻页 |
 | **M4** | `relation_stats` | user_id(PK), following_count, follower_count, updated_at | PRIMARY KEY(`user_id`) | 用户关注与粉丝统计表，隔离高频行级锁 |
 | **M4** | `outbox` | id, event_id, event_type, payload, status, attempts... | 见 3.2.3 节定义（含 `idx_dispatch`, `idx_lease`, `idx_lease_token`） | 本地事务消息表，支撑异步最终一致性派发与分布式租约抢占 |
-| **M4** | `consumed_events`| event_id(PK), consumed_at | PRIMARY KEY(`event_id`) | 消费端事务幂等去重表，保障精确一次消费 |
+| **M4** | `consumed_events`| event_id(PK), consumed_at | PRIMARY KEY(`event_id`)<br>(`consumed_at`) | 消费端幂等去重表，**业务成功后**才写入；`idx_consumed_at` 供 7 天保留期清理 |
 | **M5** | `notifications` | id, recipient_id, actor_id, type, target_id, is_read, created_at | (`recipient_id`, `created_at` DESC, `id` DESC)<br>(`recipient_id`, `is_read`) | 系统通知明细表 |
 
 ### 4.1 分片上传状态机与位图控制
