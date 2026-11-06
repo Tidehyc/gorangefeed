@@ -246,7 +246,7 @@
 |---|---|---|---|---|
 | **M9-01** | 审核任务与违规治理数据表迁移 | M0-05 | 编写 `000012_create_moderation_tables` 迁移脚本；创建 `review_tasks` 表（`video_id, status, risk_score, matched_words, reviewer_id, review_note`）与 `moderation_logs` 表；通过 migrate up/down 回滚验证 | `DONE` |
 | **M9-02** | 审核中台领域模型与规则引擎契约定义 | — | 在 `internal/domain/moderation` 定义 `ReviewTask` 聚合根（包含 `Approved/Rejected/Pending` 状态机流转）、`ReviewPolicy` 策略枚举（先审后发/先发后审）、`SensitiveMatcher` 接口契约；单元测试覆盖 | `DONE` |
-| **M9-03** | 基于 Aho-Corasick 算法的敏感词机审引擎 | M9-02 | 在 `internal/service/moderation` 实现高性能敏感词检测器：构建双数组 AC 自动机，支持 10 万+ 敏感词毫秒级多模式匹配，命中敏感词自动打标并根据风险权重自动判定拦截；单元测试覆盖 | `DONE` |
+| **M9-03** | 基于 Aho-Corasick 算法的敏感词机审引擎 | M9-02 | 在 `internal/service/moderation` 实现 AC 自动机（Aho-Corasick）多模式匹配检测器：内置 19 条种子词库（10 条高危自动拦截 + 9 条中危转人工），支持运行时 `AddWord` 扩展；匹配耗时随文本长度线性增长、与词库规模无关，命中后按风险权重自动打标判定；单元测试覆盖 | `DONE` |
 | **M9-04** | 运营管理后台控制器与全路由挂载 | M9-03 | 在 `internal/http/admin` 暴露 `GET /api/v1/admin/reviews`、`POST /api/v1/admin/videos/:id/review`、`POST /api/v1/admin/videos/:id/takedown`、`POST /api/v1/admin/users/:id/ban`；绑定管理员 RBAC 权限校验；依赖装配与 Handler 单测 | `DONE` |
 | **M9-05** | M9 内容审核与合规治理全生命周期 E2E 集成测试 | M9-04 | 在 `test/e2e/moderation_lifecycle_test.go` 中验证黑盒测试：敏感词自动命中打标与风险阻断 → 先发后审与先审后发双轨流转 → 运营审核驳回自动下架视频与撤销时间线索引 → 违规账号封禁后鉴权即时失效 → `make vet && make test` 全量绿灯回归 | `DONE` |
 
