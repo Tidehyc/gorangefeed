@@ -31,4 +31,10 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 	{
 		videoGroup.POST("/:videoId/view", softAuth, h.RecordView)
 	}
+
+	// Tag timeline endpoint: the topic page a feed card links into.
+	tagGroup := v1.Group("/tags")
+	{
+		tagGroup.GET("/:tag/videos", softAuth, h.GetTagFeed)
+	}
 }

@@ -182,6 +182,10 @@ func (m *mockVideoRepoForSvc) UpdatePublishSeq(ctx context.Context, id int64, pu
 	return nil
 }
 
+func (m *mockVideoRepoForSvc) HideAllByAuthor(ctx context.Context, authorID int64) (int64, error) {
+	return 0, nil
+}
+
 type mockSeqGen struct {
 	current int64
 }

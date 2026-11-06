@@ -246,6 +246,10 @@ func (m *mockVideoRepo) UpdatePublishSeq(ctx context.Context, videoID int64, pub
 	return domainvideo.ErrVideoNotFound
 }
 
+func (m *mockVideoRepo) HideAllByAuthor(ctx context.Context, authorID int64) (int64, error) {
+	return 0, nil
+}
+
 // --- Tests ---
 
 func TestService_Initialization(t *testing.T) {

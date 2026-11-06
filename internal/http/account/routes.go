@@ -35,6 +35,8 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 		{
 			authRequired.GET("/me", h.GetMe)
 			authRequired.PUT("/me", h.UpdateMe)
+			authRequired.PUT("/me/password", h.ChangePassword)
+			authRequired.DELETE("/me", h.DeleteAccount)
 			authRequired.POST("/avatar", h.UploadAvatar)
 		}
 

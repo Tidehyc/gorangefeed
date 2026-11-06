@@ -11,6 +11,7 @@ import (
 	domainfeed "github.com/Tidehyc/gorangefeed/internal/domain/feed"
 	domaininteraction "github.com/Tidehyc/gorangefeed/internal/domain/interaction"
 	domainrelation "github.com/Tidehyc/gorangefeed/internal/domain/relation"
+	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -42,6 +43,8 @@ type Service interface {
 	GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error)
 	// ListRecommendFeed is an alias for GetRecommendFeed.
 	ListRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error)
+	// GetTagFeed retrieves a page of published videos carrying one tag, newest first.
+	GetTagFeed(ctx context.Context, viewerID int64, tag string, cursor int64, limit int) (*domainfeed.FeedPage, error)
 	// RecordView reports a video playback or exposure impression, incrementing view count and updating exposure history.
 	RecordView(ctx context.Context, viewerID int64, videoID int64, event domainfeed.ViewEvent) error
 	// AppendTimeline appends a newly published video to the Redis timeline.
@@ -65,6 +68,8 @@ type service struct {
 	hotStore        domainfeed.HotTimelineStore
 	recallEngine    domainfeed.RecallEngine
 	diversifier     domainfeed.AuthorDiversifier
+	tagLoader       domainfeed.VideoTagLoader
+	tagTimeline     domainfeed.TagTimelineRepository
 	sfGroup         singleflight.Group
 }
 
@@ -96,6 +101,16 @@ func WithRecommendDependencies(recallEngine domainfeed.RecallEngine, diversifier
 	return func(s *service) {
 		s.recallEngine = recallEngine
 		s.diversifier = diversifier
+	}
+}
+
+// WithTagDependencies injects the tag read model (feed item chips) and the tag timeline (tag feed).
+// Both are optional: a service built without them serves feeds without tags and returns an empty
+// tag feed rather than failing, which keeps older tests and deployments working unchanged.
+func WithTagDependencies(loader domainfeed.VideoTagLoader, timeline domainfeed.TagTimelineRepository) Option {
+	return func(s *service) {
+		s.tagLoader = loader
+		s.tagTimeline = timeline
 	}
 }
 
@@ -600,6 +615,15 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 		}
 	}
 
+	// 3b. Load tag chips for the page in one batch. A failure here degrades the page to "no tags"
+	// instead of failing the feed: tags are decoration for the client, not part of the contract.
+	tagMap := make(map[int64][]string)
+	if s.tagLoader != nil {
+		if m, err := s.tagLoader.ListVideoTags(ctx, videoIDs); err == nil {
+			tagMap = m
+		}
+	}
+
 	// 4. Assemble final FeedItems in original order
 	items := make([]*domainfeed.FeedItem, 0, len(videoIDs))
 	for _, id := range videoIDs {
@@ -631,10 +655,48 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 			Stats:       stat,
 			IsLiked:     likedMap[id],
 			IsFollowed:  itemFollowed,
+			Tags:        tagMap[id],
 		})
 	}
 
 	return items, nil
+}
+
+// GetTagFeed returns published videos carrying one tag, newest first. The tag is normalized before
+// lookup so "#旅行", "旅行" and "旅行 " all resolve to the same dictionary row.
+func (s *service) GetTagFeed(ctx context.Context, viewerID int64, tag string, cursor int64, limit int) (*domainfeed.FeedPage, error) {
+	name := domainvideo.NormalizeTag(tag)
+	if name == "" {
+		return &domainfeed.FeedPage{Items: []*domainfeed.FeedItem{}}, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > domainfeed.MaxLimit {
+		limit = domainfeed.MaxLimit
+	}
+
+	// A service without a tag timeline (older wiring, unit tests) reports an empty page rather
+	// than failing a request the client cannot fix.
+	if s.tagTimeline == nil {
+		return &domainfeed.FeedPage{Items: []*domainfeed.FeedItem{}}, nil
+	}
+
+	videoIDs, nextCursor, hasMore, err := s.tagTimeline.ListVideoIDsByTag(ctx, name, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	items, err := s.hydrateVideoIDs(ctx, videoIDs, viewerID, false)
+	if err != nil {
+		return nil, err
+	}
+
+	return &domainfeed.FeedPage{
+		Items:      items,
+		NextCursor: nextCursor,
+		HasMore:    hasMore,
+	}, nil
 }
 
 func (s *service) GetLikeRankFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.LikeRankPage, error) {
@@ -863,7 +925,7 @@ func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor s
 
 	var candidates []int64
 	if s.recallEngine != nil {
-		candidates, _ = s.recallEngine.Recall(ctx, poolSize, seed)
+		candidates, _ = s.recallEngine.Recall(ctx, viewerID, poolSize, seed)
 	}
 
 	// Fallback to cold videos from DB if recall engine is not set or returns empty

@@ -12,6 +12,9 @@ type PublishVideoRequest struct {
 	PlayURL        string `json:"play_url"`
 	DurationMs     int    `json:"duration_ms"`
 	IdempotencyKey string `json:"idempotency_key"`
+	// Tags is free-form: "#旅行 海边,#美食" is split and normalized server-side. At most five
+	// survive; anything beyond that is rejected rather than silently dropped.
+	Tags []string `json:"tags"`
 }
 
 // UploadVideoResponse returns uploaded video media details.

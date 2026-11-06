@@ -104,7 +104,11 @@ func main() {
 	accountRepo := persistenceaccount.NewRepository(db)
 	tokenStore := persistenceaccount.NewTokenStore(rdb)
 	jwtMgr := jwt.NewTokenManager(cfg.JWT)
-	accountSvc := serviceaccount.NewService(accountRepo, tokenStore, jwtMgr, cfg.JWT)
+	// The video repository is constructed here, before the account service, because account
+	// deletion needs it to hide the author's content.
+	videoRepo := persistencevideo.NewRepository(db)
+	accountSvc := serviceaccount.NewService(accountRepo, tokenStore, jwtMgr, cfg.JWT,
+		serviceaccount.WithVideoHider(videoRepo))
 	accountHandler := httpaccount.NewHandler(accountSvc, jwtMgr, avatarStorage)
 
 	// 5. Assemble Video Domain & Storage
@@ -113,7 +117,6 @@ func main() {
 		l.Error("failed to initialize video storage", "error", err)
 		os.Exit(1)
 	}
-	videoRepo := persistencevideo.NewRepository(db)
 	videoSvc := servicevideo.NewService(videoRepo, accountRepo)
 	videoHandler := httpvideo.NewHandler(videoSvc, videoStorage)
 
@@ -149,11 +152,14 @@ func main() {
 	feedDBRepo := persistencefeed.NewFeedDBRepository(db)
 	recallEngine := servicefeed.NewMultiSourceRecallEngine(hotStore, timelineRepo, feedDBRepo)
 	diversifier := servicefeed.NewAuthorDiversifier()
+	// Tag read model: one adapter serves both the chips on feed items and the topic timeline.
+	tagRepo := persistencefeed.NewTagRepository(db)
 	feedSvc := servicefeed.NewService(
 		timelineRepo, pageCache, cardCache, statCache, exposureRepo, feedDBRepo,
 		servicefeed.WithFollowingDependencies(followingRepo, relationRepo, interactionRepo),
 		servicefeed.WithHotTimelineStore(hotStore),
 		servicefeed.WithRecommendDependencies(recallEngine, diversifier),
+		servicefeed.WithTagDependencies(tagRepo, tagRepo),
 	)
 	feedHandler := httpfeed.NewHandler(feedSvc)
 

@@ -64,6 +64,39 @@ func (h *Handler) GetGlobalFeed(c *gin.Context) {
 	response.OK(c, page)
 }
 
+// GetTagFeed handles GET /api/v1/tags/:tag/videos.
+// Returns published videos carrying the tag, newest first, using the same keyset cursor as the
+// global feed so a client can page through a topic without gaps.
+func (h *Handler) GetTagFeed(c *gin.Context) {
+	viewerID := c.GetInt64(middleware.ContextKeyUserID)
+
+	tag := strings.TrimSpace(c.Param("tag"))
+	if tag == "" {
+		response.Fail(c, response.ErrInvalidParam("tag is required"))
+		return
+	}
+
+	cursor, err := strconv.ParseInt(c.DefaultQuery("cursor", "0"), 10, 64)
+	if err != nil || cursor < 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid cursor"))
+		return
+	}
+
+	limit, err := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	if err != nil || limit <= 0 {
+		response.Fail(c, response.ErrInvalidParam("Invalid limit"))
+		return
+	}
+
+	page, err := h.svc.GetTagFeed(c.Request.Context(), viewerID, tag, cursor, limit)
+	if err != nil {
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, page)
+}
+
 // RecordView handles POST /api/v1/videos/:videoId/view.
 // Reports video playback or view impression, driving view_count increment and exposure tracking.
 func (h *Handler) RecordView(c *gin.Context) {

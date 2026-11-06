@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,7 @@ func init() {
 type mockAuthState struct {
 	blacklisted map[string]bool
 	banned      map[int64]bool
+	invalidated map[int64]time.Time
 }
 
 func (m *mockAuthState) IsAccessTokenBlacklisted(ctx context.Context, tokenID string) (bool, error) {
@@ -29,6 +31,14 @@ func (m *mockAuthState) IsAccessTokenBlacklisted(ctx context.Context, tokenID st
 
 func (m *mockAuthState) IsUserBanned(ctx context.Context, userID int64) (bool, error) {
 	return m.banned[userID], nil
+}
+
+func (m *mockAuthState) IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error) {
+	cutoff, ok := m.invalidated[userID]
+	if !ok {
+		return false, nil
+	}
+	return issuedAt.Unix() < cutoff.Unix(), nil
 }
 
 func setupAuthTest() (*jwt.TokenManager, *gin.Engine) {
@@ -242,5 +252,57 @@ func TestRequireRole(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403 when the role cannot be resolved, got %d", w.Code)
+	}
+}
+
+func TestJWTAuth_RejectsTokensIssuedBeforeCredentialChange(t *testing.T) {
+	jwtMgr, r := setupAuthTest()
+
+	// A cutoff in the future invalidates every token this account already holds.
+	state := &mockAuthState{
+		blacklisted: map[string]bool{},
+		banned:      map[int64]bool{},
+		invalidated: map[int64]time.Time{2001: time.Now().Add(time.Minute)},
+	}
+
+	r.GET("/protected", JWTAuth(jwtMgr, state), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"user_id": MustGetUserID(c)})
+	})
+	r.GET("/optional", SoftJWTAuth(jwtMgr, state), func(c *gin.Context) {
+		uid, ok := GetUserID(c)
+		c.JSON(http.StatusOK, gin.H{"authenticated": ok, "user_id": uid})
+	})
+
+	staleToken, _, _ := jwtMgr.GenerateAccessToken(2001, "stale-token")
+	freshUserToken, _, _ := jwtMgr.GenerateAccessToken(2002, "other-user-token")
+
+	// 1. Hard auth: a retired credential is rejected outright.
+	req, _ := http.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+staleToken)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for a retired credential, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// 2. Soft auth: the same token degrades to guest instead of failing the request.
+	req, _ = http.NewRequest(http.MethodGet, "/optional", nil)
+	req.Header.Set("Authorization", "Bearer "+staleToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for optional auth, got %d", w.Code)
+	}
+	if body := w.Body.String(); !strings.Contains(body, `"authenticated":false`) {
+		t.Fatalf("expected the request to fall back to guest, got %s", body)
+	}
+
+	// 3. Another account's token is unaffected by the cutoff.
+	req, _ = http.NewRequest(http.MethodGet, "/protected", nil)
+	req.Header.Set("Authorization", "Bearer "+freshUserToken)
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected unaffected user to pass, got %d: %s", w.Code, w.Body.String())
 	}
 }

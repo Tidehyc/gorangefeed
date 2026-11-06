@@ -127,6 +127,7 @@ func (h *Handler) Publish(c *gin.Context) {
 		req.CoverURL,
 		req.DurationMs,
 		idempotencyKey,
+		req.Tags,
 	)
 	if err != nil {
 		response.Fail(c, err)

@@ -32,6 +32,11 @@ type Repository interface {
 	// UpdateStatus updates the video status. Enforces author authorization.
 	UpdateStatus(ctx context.Context, id int64, authorID int64, status VideoStatus) error
 
+	// HideAllByAuthor hides every published video owned by authorID and returns the number of
+	// rows changed. Used when an account is deleted: the author is gone, so the per-video
+	// authorization in UpdateStatus cannot be exercised one by one.
+	HideAllByAuthor(ctx context.Context, authorID int64) (int64, error)
+
 	// UpdatePublishSeq updates the sequence number for an existing video.
 	UpdatePublishSeq(ctx context.Context, id int64, publishSeq int64) error
 }

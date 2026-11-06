@@ -30,6 +30,23 @@ type Service interface {
 	GetProfile(ctx context.Context, userID int64) (*domainaccount.User, error)
 	UpdateProfile(ctx context.Context, userID int64, nickname, bio string) (*domainaccount.User, error)
 	UpdateAvatar(ctx context.Context, userID int64, avatarURL string) error
+	// ChangePassword verifies the current credential, stores a new hash and retires every token
+	// issued before the change so other devices cannot keep using the old session.
+	ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword string) error
+	// DeleteAccount soft-deletes the account: the author's videos are hidden first, then the
+	// account status becomes deleted and all issued tokens are retired.
+	DeleteAccount(ctx context.Context, userID int64, password string) error
+}
+
+// Option customises a service instance without widening the constructor signature for every
+// caller that does not need the dependency.
+type Option func(*service)
+
+// WithVideoHider injects the content dependency used by DeleteAccount.
+func WithVideoHider(hider domainaccount.VideoHider) Option {
+	return func(s *service) {
+		s.videoHider = hider
+	}
 }
 
 type service struct {
@@ -37,16 +54,21 @@ type service struct {
 	tokenStore domainaccount.TokenStore
 	jwtManager *jwt.TokenManager
 	cfg        config.JWTConfig
+	videoHider domainaccount.VideoHider
 }
 
 // NewService creates a new account application Service.
-func NewService(repo domainaccount.Repository, tokenStore domainaccount.TokenStore, jwtManager *jwt.TokenManager, cfg config.JWTConfig) Service {
-	return &service{
+func NewService(repo domainaccount.Repository, tokenStore domainaccount.TokenStore, jwtManager *jwt.TokenManager, cfg config.JWTConfig, opts ...Option) Service {
+	s := &service{
 		repo:       repo,
 		tokenStore: tokenStore,
 		jwtManager: jwtManager,
 		cfg:        cfg,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 func (s *service) Register(ctx context.Context, username, password string) (*domainaccount.User, error) {
@@ -230,4 +252,90 @@ func (s *service) UpdateAvatar(ctx context.Context, userID int64, avatarURL stri
 		return err
 	}
 	return nil
+}
+
+func (s *service) ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword string) error {
+	user, err := s.repo.FindByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
+			return response.ErrNotFound("User not found")
+		}
+		return err
+	}
+
+	if !domainaccount.CheckPassword(oldPassword, user.PasswordHash) {
+		return response.ErrUnauthorized("Current password is incorrect")
+	}
+	if oldPassword == newPassword {
+		return response.ErrInvalidParam("New password must differ from the current password")
+	}
+	if err := domainaccount.ValidatePassword(newPassword); err != nil {
+		return response.ErrInvalidParam(err.Error())
+	}
+
+	hash, err := domainaccount.HashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("hash password failed: %w", err)
+	}
+
+	if err := s.repo.UpdatePassword(ctx, userID, hash); err != nil {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
+			return response.ErrNotFound("User not found")
+		}
+		return err
+	}
+
+	s.retireCredentials(ctx, userID)
+	return nil
+}
+
+func (s *service) DeleteAccount(ctx context.Context, userID int64, password string) error {
+	user, err := s.repo.FindByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
+			return response.ErrNotFound("User not found")
+		}
+		return err
+	}
+
+	if !domainaccount.CheckPassword(password, user.PasswordHash) {
+		return response.ErrUnauthorized("Password is incorrect")
+	}
+
+	// Hide the content before flipping the status. If hiding fails the account stays usable and
+	// the caller can retry, rather than ending up with a deleted account whose videos still sit
+	// in every timeline.
+	if s.videoHider != nil {
+		if _, err := s.videoHider.HideAllByAuthor(ctx, userID); err != nil {
+			return fmt.Errorf("hide author videos failed: %w", err)
+		}
+	}
+
+	// Anonymise before marking the account deleted: comment threads and mention records keep
+	// pointing at this row, and they render whatever nickname and handle it still carries.
+	if err := s.repo.Anonymize(ctx, userID); err != nil {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
+			return response.ErrNotFound("User not found")
+		}
+		return fmt.Errorf("anonymize account failed: %w", err)
+	}
+
+	if err := s.repo.UpdateStatus(ctx, userID, domainaccount.UserStatusDeleted); err != nil {
+		if errors.Is(err, domainaccount.ErrUserNotFound) {
+			return response.ErrNotFound("User not found")
+		}
+		return err
+	}
+
+	s.retireCredentials(ctx, userID)
+	return nil
+}
+
+// retireCredentials rejects every access token minted before now. Best effort on purpose: the
+// credential change is already durable in MySQL, so surfacing a Redis failure here would tell the
+// client the change failed and make it retry with the password it just replaced. A failed cutoff
+// only leaves other devices holding their current access token until it expires.
+func (s *service) retireCredentials(ctx context.Context, userID int64) {
+	ttl := s.cfg.AccessTTL + s.cfg.RefreshTTL
+	_ = s.tokenStore.InvalidateUserTokens(ctx, userID, time.Now(), ttl)
 }

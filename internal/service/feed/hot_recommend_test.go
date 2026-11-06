@@ -165,7 +165,7 @@ type mockRecallEngineForService struct {
 	recalledIDs []int64
 }
 
-func (m *mockRecallEngineForService) Recall(ctx context.Context, targetCount int, seed int64) ([]int64, error) {
+func (m *mockRecallEngineForService) Recall(ctx context.Context, viewerID int64, targetCount int, seed int64) ([]int64, error) {
 	return m.recalledIDs, nil
 }
 

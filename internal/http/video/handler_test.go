@@ -32,7 +32,7 @@ type mockVideoService struct {
 	deleteVideoFn      func(ctx context.Context, videoID int64, currentUserID int64) error
 }
 
-func (m *mockVideoService) Publish(ctx context.Context, authorID int64, title, description, playURL, coverURL string, durationMs int, idempotencyKey string) (*domainvideo.VideoDetail, error) {
+func (m *mockVideoService) Publish(ctx context.Context, authorID int64, title, description, playURL, coverURL string, durationMs int, idempotencyKey string, tags []string) (*domainvideo.VideoDetail, error) {
 	if m.publishFn != nil {
 		return m.publishFn(ctx, authorID, title, description, playURL, coverURL, durationMs, idempotencyKey)
 	}
@@ -85,6 +85,14 @@ func (m *mockTokenStore) MarkUserBanned(ctx context.Context, userID int64, ttl t
 }
 func (m *mockTokenStore) ClearUserBanned(ctx context.Context, userID int64) error { return nil }
 func (m *mockTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, error) {
+	return false, nil
+}
+
+func (m *mockTokenStore) InvalidateUserTokens(ctx context.Context, userID int64, invalidBefore time.Time, ttl time.Duration) error {
+	return nil
+}
+
+func (m *mockTokenStore) IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error) {
 	return false, nil
 }
 

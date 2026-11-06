@@ -115,6 +115,9 @@ type FeedItem struct {
 	Stats       FeedStat   `json:"stats"`
 	IsLiked     bool       `json:"is_liked"`
 	IsFollowed  bool       `json:"is_followed"`
+	// Tags carries display names so the client can render topic chips without parsing the
+	// description. Empty when the video has no tags.
+	Tags []string `json:"tags,omitempty"`
 }
 
 // FeedPage represents a paginated list of feed items.

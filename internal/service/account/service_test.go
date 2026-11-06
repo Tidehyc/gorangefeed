@@ -2,6 +2,7 @@ package account
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -79,10 +80,32 @@ func (m *mockRepository) UpdateStatus(ctx context.Context, id int64, status doma
 	return nil
 }
 
+func (m *mockRepository) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.PasswordHash = passwordHash
+	return nil
+}
+
+func (m *mockRepository) Anonymize(ctx context.Context, id int64) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.Username = fmt.Sprintf("deleted_%d", id)
+	u.Nickname = "已注销用户"
+	u.AvatarURL = ""
+	u.Bio = ""
+	return nil
+}
+
 type mockTokenStore struct {
 	sessions    map[string]string // sessionID -> currentTokenID
 	blacklisted map[string]bool   // tokenID -> true
 	banned      map[int64]bool    // userID -> banned
+	invalidated map[int64]time.Time
 }
 
 func newMockTokenStore() *mockTokenStore {
@@ -90,6 +113,7 @@ func newMockTokenStore() *mockTokenStore {
 		sessions:    make(map[string]string),
 		blacklisted: make(map[string]bool),
 		banned:      make(map[int64]bool),
+		invalidated: make(map[int64]time.Time),
 	}
 }
 
@@ -137,6 +161,19 @@ func (m *mockTokenStore) ClearUserBanned(ctx context.Context, userID int64) erro
 
 func (m *mockTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, error) {
 	return m.banned[userID], nil
+}
+
+func (m *mockTokenStore) InvalidateUserTokens(ctx context.Context, userID int64, invalidBefore time.Time, ttl time.Duration) error {
+	m.invalidated[userID] = invalidBefore
+	return nil
+}
+
+func (m *mockTokenStore) IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error) {
+	cutoff, ok := m.invalidated[userID]
+	if !ok {
+		return false, nil
+	}
+	return issuedAt.Unix() < cutoff.Unix(), nil
 }
 
 func setupTestService() (Service, *mockRepository, *mockTokenStore) {

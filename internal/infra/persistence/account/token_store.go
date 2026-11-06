@@ -2,7 +2,9 @@ package account
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
@@ -126,4 +128,42 @@ func (s *redisTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool,
 		return false, err
 	}
 	return val > 0, nil
+}
+
+// invalidBeforeKey holds the Unix second at which a user's credentials were retired.
+func invalidBeforeKey(userID int64) string {
+	return fmt.Sprintf("auth:invalid_before:%d", userID)
+}
+
+func (s *redisTokenStore) InvalidateUserTokens(ctx context.Context, userID int64, invalidBefore time.Time, ttl time.Duration) error {
+	if userID <= 0 {
+		return nil
+	}
+	if ttl <= 0 {
+		return nil
+	}
+	return s.client.Set(ctx, invalidBeforeKey(userID), invalidBefore.Unix(), ttl).Err()
+}
+
+// IsUserTokenInvalidated compares a token's issue time against the stored cutoff. JWT `iat` has
+// second precision, so the comparison is strict: a token minted in the same second as the cutoff
+// is treated as issued after it. That keeps an immediate re-login working, at the cost of leaving
+// a sub-second window open for a token minted immediately before the cutoff. The caller that
+// triggered the cutoff is covered separately by blacklisting its own access token.
+func (s *redisTokenStore) IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error) {
+	if userID <= 0 || issuedAt.IsZero() {
+		return false, nil
+	}
+	raw, err := s.client.Get(ctx, invalidBeforeKey(userID)).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return false, nil
+		}
+		return false, err
+	}
+	cutoff, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return false, fmt.Errorf("parse invalid_before error: %w", err)
+	}
+	return issuedAt.Unix() < cutoff, nil
 }
