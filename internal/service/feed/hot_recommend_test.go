@@ -240,9 +240,9 @@ func TestService_GetRecommendFeed_ExposureAndDiversification(t *testing.T) {
 	}
 
 	// Case 2: Logged-in user 8888 who has viewed V1
-	// V1 must be filtered out by ExposureRepository
-	// Remaining candidates: 2 (Author 100), 3 (Author 100), 4 (Author 200), 5 (Author 300), 6 (Author 400), 7 (Author 500)
-	// Diversification selects 2 (Author 100), 4 (Author 200), 5 (Author 300), 6 (Author 400)
+	// The pool is ordered first (identical to the guest ordering), then exposure is applied as a
+	// mask while walking it: ordered = [1,4,5,6,7,2,3], minus V1 => [4,5,6,7,2,3], page = [4,5,6,7].
+	// Ordering before filtering is deliberate — see TestService_GetRecommendFeed_PaginationNoDuplicates.
 	userPage, err := svc.GetRecommendFeed(ctx, 8888, "", 4)
 	if err != nil {
 		t.Fatalf("unexpected error for logged-in user: %v", err)
@@ -255,7 +255,7 @@ func TestService_GetRecommendFeed_ExposureAndDiversification(t *testing.T) {
 			t.Fatalf("video 1 should have been filtered by exposure repository")
 		}
 	}
-	expectedUserOrder := []int64{2, 4, 5, 6}
+	expectedUserOrder := []int64{4, 5, 6, 7}
 	for i, expectedID := range expectedUserOrder {
 		if userPage.Items[i].ID != expectedID {
 			t.Errorf("user item[%d] = %d, want %d", i, userPage.Items[i].ID, expectedID)
@@ -266,5 +266,93 @@ func TestService_GetRecommendFeed_ExposureAndDiversification(t *testing.T) {
 	_, err = svc.GetRecommendFeed(ctx, 0, "not-a-valid-recommend-cursor***", 10)
 	if err != domainfeed.ErrInvalidRecommendCursor {
 		t.Fatalf("expected ErrInvalidRecommendCursor, got %v", err)
+	}
+}
+
+// TestService_GetRecommendFeed_PaginationNoDuplicates is the regression guard for the bug this
+// change fixes: paging used to re-serve page 1 forever because the cursor's page number never
+// reached the recall/diversify step. Walking the whole session must yield every ordered
+// candidate exactly once, in order.
+func TestService_GetRecommendFeed_PaginationNoDuplicates(t *testing.T) {
+	ctx := context.Background()
+
+	candidateIDs := []int64{1, 2, 3, 4, 5, 6, 7}
+	cardMap := make(map[int64]*domainfeed.FeedCard, len(candidateIDs))
+	statMap := make(map[int64]*domainfeed.FeedStat, len(candidateIDs))
+	authors := map[int64]int64{1: 100, 2: 100, 3: 100, 4: 200, 5: 300, 6: 400, 7: 500}
+	for _, id := range candidateIDs {
+		cardMap[id] = &domainfeed.FeedCard{VideoID: id, AuthorID: authors[id], Title: "V"}
+		statMap[id] = &domainfeed.FeedStat{VideoID: id}
+	}
+
+	exposureRepo := &mockExposureRepo{
+		exposures: map[int64][]int64{8888: {1}},
+	}
+
+	newSvc := func() servicefeed.Service {
+		return servicefeed.NewService(
+			&mockTimelineRepo{},
+			&mockPageCache{},
+			&mockCardCache{cards: cardMap},
+			&mockStatCache{stats: statMap},
+			exposureRepo,
+			&mockDBRepo{cardsMap: cardMap, statsMap: statMap},
+			servicefeed.WithRecommendDependencies(
+				&mockRecallEngineForService{recalledIDs: candidateIDs},
+				servicefeed.NewAuthorDiversifier(),
+			),
+		)
+	}
+
+	cases := []struct {
+		name     string
+		viewerID int64
+		want     []int64
+	}{
+		// Guest: diversification only. ordered = [1,4,5,6,7,2,3].
+		{name: "guest", viewerID: 0, want: []int64{1, 4, 5, 6, 7, 2, 3}},
+		// User 8888 has watched V1: same ordering with V1 masked out.
+		{name: "user skips exposed", viewerID: 8888, want: []int64{4, 5, 6, 7, 2, 3}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newSvc()
+
+			var got []int64
+			cursor := ""
+			for page := 0; page < 10; page++ {
+				resp, err := svc.GetRecommendFeed(ctx, tc.viewerID, cursor, 2)
+				if err != nil {
+					t.Fatalf("page %d: unexpected error: %v", page, err)
+				}
+				for _, item := range resp.Items {
+					got = append(got, item.ID)
+				}
+				if !resp.HasMore {
+					if resp.NextCursor != "" {
+						t.Errorf("page %d: next_cursor must be empty when has_more=false, got %q", page, resp.NextCursor)
+					}
+					cursor = ""
+					break
+				}
+				if resp.NextCursor == "" {
+					t.Fatalf("page %d: has_more=true but next_cursor is empty", page)
+				}
+				cursor = resp.NextCursor
+			}
+			if cursor != "" {
+				t.Fatalf("pagination did not terminate after 10 pages, last cursor = %q", cursor)
+			}
+
+			if len(got) != len(tc.want) {
+				t.Fatalf("served %d items across pages, want %d: got %v", len(got), len(tc.want), got)
+			}
+			for i := range tc.want {
+				if got[i] != tc.want[i] {
+					t.Errorf("item[%d] = %d, want %d (full sequence %v)", i, got[i], tc.want[i], got)
+				}
+			}
+		})
 	}
 }

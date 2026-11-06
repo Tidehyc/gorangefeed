@@ -22,12 +22,12 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 | FIX-02 ✅ | P0 | 封禁不生效：token 不失效、refresh 可续命 | `service/moderation`、`service/account`、`middleware/auth.go` | M |
 | FIX-03 ✅ | P1 | 审核通过后时间线 score 用错量纲（videoID 当 publish_seq） | `service/moderation/service.go:144` | S |
 | FIX-04 | P1 | 消费端先标记后处理，失败即静默丢事件 | `feed/fanout.go:68`、`feed/hot_score_consumer.go:56`、`notification/consumer.go:81` | M |
-| FIX-05 | P1 | 推荐流翻页重复（page 不参与召回） | `service/feed/service.go:824-961` | S |
+| FIX-05 ✅ | P1 | 推荐流翻页重复（page 不参与召回） | `service/feed/service.go:824-961` | S |
 | FIX-06 | P2 | UID 维度限流写好了但没接线 | `middleware/ratelimit.go:113` | S |
 | FIX-07 | P2 | 文档与实现漂移 5 处 | `README.md`、`docs/*.md` | S |
 | FIX-08 | P2 | E2E 断言缺口（M9-05 声称的验证点没测） | `test/e2e/moderation_lifecycle_test.go` | S |
 
-进度：**FIX-01 / FIX-02 / FIX-03 已完成并有测试覆盖**（见文末「已完成项实录」），FIX-05/06/07/08 待做。
+进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 已完成并有测试覆盖**（见文末「已完成项实录」），FIX-06/07/08 待做。
 FIX-04 未动，改动最大，建议单独一个 PR。
 
 
@@ -186,11 +186,15 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 
 - 方案 A（最小改动）：把 page 混入 seed —— `recallSeed := seed + int64(page)*prime`，保证「同一 cursor 重复请求结果一致、不同 page 结果不同」两个语义同时成立。
 - 方案 B（更彻底）：召回池固定，游标改为 `{seed, offset}`，对召回结果做稳定排序后按 offset 切片。与热榜 `as_of+offset` 的写法保持一致，推荐优先选 B。
-- 无论哪种，注意 `targetRecall` 要随 page 放大（`limit*(page+1)*3`），否则深翻页会切空。
+
+实际采用 **方案 B**（见文末「FIX-05 实录」）。方案 A 被否掉的原因：换 seed 会让每一页召回的是**另一套候选**，
+池子随页漂移，曝光过滤与打散的输入也跟着变，深翻页仍然可能漏内容；只有「一次召回、一次排序、按 offset 切片」能同时保证两页不重叠且不遗漏。
 
 **验收**
 
 - E2E：连续请求 page1 / page2，断言 `video_id` 交集为空且都非空；重复请求同一 cursor 两次，断言结果完全一致（幂等）。
+- 已落地：`E2E-M4.5-07_Recommend_Pagination_No_Duplicates`（整轮翻页零重复、20 页内必然终止）、
+  `E2E-M4.5-08_Recommend_Cursor_Idempotent`（同一 cursor 两次结果逐项相同）。
 
 ---
 
@@ -299,3 +303,43 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 2. 封禁标记是 Redis 键，若 Redis 数据丢失，已签发的 access token 会在剩余 TTL（≤2h）内复活。
 3. 未做「按用户枚举并撤销会话」：`TokenStore` 没有 `user -> sessions` 反向索引，当前靠封禁标记 +
    refresh 查库覆盖，够用且不需要新增索引维护成本。
+
+### FIX-05 · 推荐流翻页重复
+
+**根因**：游标里的 `page` 只用来拼下一个游标（`EncodeRecommendCursor(page+1, seed)`），
+从未进入召回或排序，`Recall(targetCount, seed)` 的入参在每一页完全一致
+⇒ 每一页都从同一个池子的头部重新取。曝光过滤只能偶然削掉一部分，游客（`viewerID == 0` 不走过滤）则 100% 重复。
+
+**改法**：游标从 `{page, seed}` 换成 `{offset, seed}`，语义从「第几页」变成「已消费了多少条」：
+
+- `internal/domain/feed/entity.go`：`RecommendCursor.Page` → `Offset`，编解码同步改；
+  空游标返回 `(0, 0)`，负 offset 视为非法；旧格式游标（只有 `page` 字段）解码为 `offset=0`，
+  即**重启会话**——这比在一个新召回的池子里猜位置安全。
+- `internal/service/feed/service.go` `GetRecommendFeed`：
+  1. 池子大小只由 `limit` 决定（`4×limit`，夹在 40~200），**与游标无关**，否则翻页会换池；
+  2. 整个池子用会话内稳定的 `seed` 召回后，**只打散一次**得到 `ordered`；
+  3. 从 `ordered[offset:]` 起按窗口向走，窗口内做曝光过滤，取够 `limit` 或走完池子为止；
+  4. 推进量按**窗口内实际消费到的位置**算（跳过项也算消费），而不是按「服务了几条」，
+     否则下一页会回头重扫被过滤掉的部分；
+  5. 池子走完仍不满时保留原有的 timeline / 冷区补填，补填后 `position` 直接置到池尾，
+     `has_more=false`——补填项在池子之外，给游标就等于把它们重复发一次。
+- 顺序是「先排序、后过滤」，不是「先过滤、后排序」：后者会让池子随用户观看行为收缩，
+  第 2 页算出来的 offset 落在已经位移过的序列上，重复会以另一种形态回来。
+
+**测试**
+
+- 新增 `TestService_GetRecommendFeed_PaginationNoDuplicates`：limit=2 连翻整轮，
+  断言游客得到 `[1,4,5,6,7,2,3]`、已看 V1 的用户得到 `[4,5,6,7,2,3]`，且 **10 页内必然终止**（不会死循环）。
+- 反证：把 `nextCursor` 改回用 `offset`（即游标不推进），该用例立刻失败并报
+  `pagination did not terminate after 10 pages, last cursor = ..."offset":0...` —— 与线上症状一致。
+- `TestService_GetRecommendFeed_ExposureAndDiversification` 的用户页期望值随之从 `[2,4,5,6]` 改为 `[4,5,6,7]`：
+  排序先于过滤，被过滤项只在走窗口时被跳过。这是**有意的语义变化**，不是为了让测试变绿。
+
+**遗留取舍**
+
+- 池子的稳定性依赖召回的确定性：`explore` 通道用 `seed` 播种（稳定），但 `hot` 通道按
+  `time.Now().Truncate(time.Minute)` 取快照、`latest` 通道按最新 N 条取——**跨分钟翻页时池子仍会小幅漂移**，
+  极端情况下可能漏一条或重一条。彻底解决要把池子按 `seed` 服务端缓存（会话级），代价是多一份 Redis 状态，
+  留作后续优化，当前不引入。
+- 池子上限 200 条：`limit=30` 时最多服务约 6 页，翻到底 `has_more` 会转 false 而不是无限深挖。
+  这是有意的——推荐流不需要无限下滑，深翻页本来就应该回到重新召回（刷新）。

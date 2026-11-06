@@ -276,22 +276,24 @@ func DecodeHotCursor(cursor string) (asOf int64, offset int, err error) {
 	return hc.AsOf, hc.Offset, nil
 }
 
-// RecommendCursor stores state for diversified multi-source recommendation pagination.
+// RecommendCursor stores the paging state of a recommendation session. Offset counts how many
+// items of the session's stable candidate ordering have already been served; it replaces the old
+// page index, which could not be mapped back to a position inside the recalled pool.
 type RecommendCursor struct {
-	Scene string `json:"scene"`
-	Page  int    `json:"page"`
-	Seed  int64  `json:"seed"`
+	Scene  string `json:"scene"`
+	Offset int    `json:"offset"`
+	Seed   int64  `json:"seed"`
 }
 
-// EncodeRecommendCursor encodes recommendation page index and random seed into a base64 cursor.
-func EncodeRecommendCursor(page int, seed int64) string {
-	if page <= 1 && seed <= 0 {
+// EncodeRecommendCursor encodes the consumed offset and session seed into a base64 cursor.
+func EncodeRecommendCursor(offset int, seed int64) string {
+	if offset <= 0 && seed <= 0 {
 		return ""
 	}
 	rc := RecommendCursor{
-		Scene: string(SceneRecommend),
-		Page:  page,
-		Seed:  seed,
+		Scene:  string(SceneRecommend),
+		Offset: offset,
+		Seed:   seed,
 	}
 	b, err := json.Marshal(rc)
 	if err != nil {
@@ -300,27 +302,29 @@ func EncodeRecommendCursor(page int, seed int64) string {
 	return base64.URLEncoding.EncodeToString(b)
 }
 
-// DecodeRecommendCursor decodes a recommendation cursor into page index and seed.
-func DecodeRecommendCursor(cursor string) (page int, seed int64, err error) {
+// DecodeRecommendCursor decodes a recommendation cursor into consumed offset and session seed.
+// Cursors issued before the offset field existed carry only "page" and decode to offset 0, i.e.
+// they restart the session; that is preferable to guessing a position in a freshly recalled pool.
+func DecodeRecommendCursor(cursor string) (offset int, seed int64, err error) {
 	cursor = strings.TrimSpace(cursor)
 	if cursor == "" || cursor == "0" {
-		return 1, 0, nil
+		return 0, 0, nil
 	}
 	b, err := base64.URLEncoding.DecodeString(cursor)
 	if err != nil {
 		b, err = base64.StdEncoding.DecodeString(cursor)
 		if err != nil {
-			return 1, 0, ErrInvalidRecommendCursor
+			return 0, 0, ErrInvalidRecommendCursor
 		}
 	}
 	var rc RecommendCursor
 	if err := json.Unmarshal(b, &rc); err != nil {
-		return 1, 0, ErrInvalidRecommendCursor
+		return 0, 0, ErrInvalidRecommendCursor
 	}
-	if rc.Page < 1 {
-		return 1, 0, ErrInvalidRecommendCursor
+	if rc.Offset < 0 {
+		return 0, 0, ErrInvalidRecommendCursor
 	}
-	return rc.Page, rc.Seed, nil
+	return rc.Offset, rc.Seed, nil
 }
 
 // HotScoreAction defines the source action influencing engagement score.

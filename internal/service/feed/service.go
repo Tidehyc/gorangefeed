@@ -14,6 +14,18 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+const (
+	// recommendPoolMultiplier scales the recall pool by the requested page size.
+	recommendPoolMultiplier = 4
+	recommendMinPoolSize    = 40
+	recommendMaxPoolSize    = 200
+	// recommendLookaheadMultiplier widens a page window so the page can still fill up after the
+	// exposure filter removes candidates the viewer has already watched.
+	recommendLookaheadMultiplier = 3
+	// recommendAuthorInterval is the minimum distance between two videos of the same author.
+	recommendAuthorInterval = 3
+)
+
 // Service defines application use cases for feed querying and telemetry.
 type Service interface {
 	// GetGlobalFeed retrieves a page of the global video feed with multi-tier caching and cold-hot stitching.
@@ -822,7 +834,7 @@ func (s *service) ListRecommendFeed(ctx context.Context, viewerID int64, cursor 
 }
 
 func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
-	page, seed, err := domainfeed.DecodeRecommendCursor(cursor)
+	offset, seed, err := domainfeed.DecodeRecommendCursor(cursor)
 	if err != nil {
 		return nil, domainfeed.ErrInvalidRecommendCursor
 	}
@@ -838,20 +850,25 @@ func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor s
 		seed = time.Now().UnixNano()
 	}
 
-	// 1. Multi-source candidate recall
-	targetRecall := limit * 3
-	if targetRecall < 30 {
-		targetRecall = 30
+	// 1. Recall a candidate pool sized by limit only, never by the cursor. Every page of a session
+	// slices this same pool, so a page-dependent size would re-serve or skip candidates; keeping
+	// the seed stable across the session is what makes the pool reproducible.
+	poolSize := limit * recommendPoolMultiplier
+	if poolSize < recommendMinPoolSize {
+		poolSize = recommendMinPoolSize
+	}
+	if poolSize > recommendMaxPoolSize {
+		poolSize = recommendMaxPoolSize
 	}
 
 	var candidates []int64
 	if s.recallEngine != nil {
-		candidates, _ = s.recallEngine.Recall(ctx, targetRecall, seed)
+		candidates, _ = s.recallEngine.Recall(ctx, poolSize, seed)
 	}
 
 	// Fallback to cold videos from DB if recall engine is not set or returns empty
 	if len(candidates) == 0 && s.dbRepo != nil {
-		coldCards, _, _, _, err := s.dbRepo.ListColdVideos(ctx, 0, targetRecall)
+		coldCards, _, _, _, err := s.dbRepo.ListColdVideos(ctx, 0, poolSize)
 		if err == nil {
 			for _, card := range coldCards {
 				candidates = append(candidates, card.VideoID)
@@ -859,15 +876,7 @@ func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor s
 		}
 	}
 
-	// 2. Exposure filter for logged-in users (viewerID > 0)
-	if viewerID > 0 && s.exposureRepo != nil && len(candidates) > 0 {
-		filtered, err := s.exposureRepo.FilterExposed(ctx, viewerID, candidates)
-		if err == nil {
-			candidates = filtered
-		}
-	}
-
-	// 3. Batch fetch author IDs for sliding window diversification
+	// 2. Batch fetch author IDs for sliding window diversification
 	authorMap := make(map[int64]int64)
 	if len(candidates) > 0 {
 		var cardMap map[int64]*domainfeed.FeedCard
@@ -892,21 +901,62 @@ func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor s
 		}
 	}
 
-	// 4. Sliding window author diversification
-	var diversified []int64
+	// 3. Order the whole pool once. Every page is a slice of this single ordering, which is what
+	// guarantees that two consecutive pages cannot overlap. The previous implementation ran
+	// diversification per request and only used the decoded page to build the next cursor, so
+	// page N always returned page 1 again.
+	ordered := candidates
 	if s.diversifier != nil && len(candidates) > 0 {
-		diversified = s.diversifier.Diversify(candidates, authorMap, limit, 3)
-	} else {
-		diversified = candidates
-		if len(diversified) > limit {
-			diversified = diversified[:limit]
-		}
+		ordered = s.diversifier.Diversify(candidates, authorMap, len(candidates), recommendAuthorInterval)
 	}
 
-	// 5. FillCheck fallback: If remaining items less than limit, supplement from timeline or DB
-	if len(diversified) < limit {
-		seen := make(map[int64]bool)
-		for _, id := range diversified {
+	// 4. Walk forward through the ordering until this page fills. Each step drops what the viewer
+	// has already watched; the filter runs on the window, never on the whole pool, because a
+	// shrinking pool would shift the offsets that later pages are computed from.
+	// An offset at or past the end of the pool (empty pool, or a pool that drifted smaller
+	// between pages) is not an error: it simply serves nothing here and lets the fill fallback
+	// below top the page up.
+	served := make([]int64, 0, limit)
+	position := offset
+	for len(served) < limit && position < len(ordered) {
+		windowEnd := position + limit*recommendLookaheadMultiplier
+		if windowEnd > len(ordered) {
+			windowEnd = len(ordered)
+		}
+		window := ordered[position:windowEnd]
+
+		ids := window
+		if viewerID > 0 && s.exposureRepo != nil {
+			if filtered, err := s.exposureRepo.FilterExposed(ctx, viewerID, window); err == nil {
+				ids = filtered
+			}
+		}
+
+		// Advance by the pool items actually consumed, not by the number served: skipped
+		// candidates count as consumed so the next page never re-walks them.
+		consumed := len(window)
+		remaining := limit - len(served)
+		if len(ids) > remaining {
+			ids = ids[:remaining]
+		}
+		if n := len(ids); n > 0 {
+			positions := make(map[int64]int, len(window))
+			for i, id := range window {
+				positions[id] = i
+			}
+			if pos, ok := positions[ids[n-1]]; ok {
+				consumed = pos + 1
+			}
+		}
+
+		served = append(served, ids...)
+		position += consumed
+	}
+
+	// 5. FillCheck fallback: the pool ran out before the page filled, supplement from timeline or DB
+	if len(served) < limit {
+		seen := make(map[int64]bool, len(ordered)+limit)
+		for _, id := range ordered {
 			seen[id] = true
 		}
 
@@ -916,8 +966,8 @@ func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor s
 				for _, id := range recentIDs {
 					if !seen[id] {
 						seen[id] = true
-						diversified = append(diversified, id)
-						if len(diversified) >= limit {
+						served = append(served, id)
+						if len(served) >= limit {
 							break
 						}
 					}
@@ -925,40 +975,46 @@ func (s *service) GetRecommendFeed(ctx context.Context, viewerID int64, cursor s
 			}
 		}
 
-		if len(diversified) < limit && s.dbRepo != nil {
+		if len(served) < limit && s.dbRepo != nil {
 			coldCards, _, _, _, err := s.dbRepo.ListColdVideos(ctx, 0, limit*2)
 			if err == nil {
 				for _, card := range coldCards {
 					if !seen[card.VideoID] {
 						seen[card.VideoID] = true
-						diversified = append(diversified, card.VideoID)
-						if len(diversified) >= limit {
+						served = append(served, card.VideoID)
+						if len(served) >= limit {
 							break
 						}
 					}
 				}
 			}
 		}
+
+		// Supplemented items are outside the ordered pool, so paging must stop here: moving
+		// the position to the end is what stops the next cursor from handing the same
+		// fallback items out again.
+		position = len(ordered)
 	}
 
-	if len(diversified) == 0 {
+	hasMore := position < len(ordered)
+
+	var nextCursor string
+	if hasMore {
+		nextCursor = domainfeed.EncodeRecommendCursor(position, seed)
+	}
+
+	if len(served) == 0 {
 		return &domainfeed.RecommendFeedPage{
 			Items:      []*domainfeed.FeedItem{},
-			NextCursor: "",
-			HasMore:    false,
+			NextCursor: nextCursor,
+			HasMore:    hasMore,
 		}, nil
 	}
 
 	// 6. Dynamic Hydration
-	items, err := s.hydrateVideoIDs(ctx, diversified, viewerID, false)
+	items, err := s.hydrateVideoIDs(ctx, served, viewerID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hydrate recommend feed items: %w", err)
-	}
-
-	hasMore := len(diversified) >= limit
-	var nextCursor string
-	if hasMore {
-		nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)
 	}
 
 	return &domainfeed.RecommendFeedPage{

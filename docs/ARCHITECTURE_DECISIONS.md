@@ -147,7 +147,7 @@ flowchart TD
 | 业务场景 | 方法 | 路径 | 鉴权方式 | 核心入参 / Query | 游标结构与透明编码 | 成功响应核心字段 |
 |---|---|---|---|---|---|---|
 | **实时滑动热榜** | `GET` | `/api/v1/feed/hot` | SoftJWTAuth | `cursor` (string), `limit` (默认 10, 最大 30) | Base64 编码：`{"scene":"hot","as_of":1729700000,"offset":10}` | `{ items: [...], next_cursor: "ey...", has_more: true }` |
-| **轻量推荐流** | `GET` | `/api/v1/feed/recommend` | SoftJWTAuth | `cursor` (string), `limit` (默认 10, 最大 30) | Base64 编码：`{"scene":"recommend","page":1,"seed":1729700000}` | `{ items: [...], next_cursor: "ey...", has_more: true }` |
+| **轻量推荐流** | `GET` | `/api/v1/feed/recommend` | SoftJWTAuth | `cursor` (string), `limit` (默认 10, 最大 30) | Base64 编码：`{"scene":"recommend","offset":10,"seed":1729700000}`（`offset` = 会话内已消费条数） | `{ items: [...], next_cursor: "ey...", has_more: true }` |
 | **曝光行为上报** | `POST` | `/api/v1/videos/:videoId/view` | SoftJWTAuth | Path: `videoId`, Body: `{"action":"play"\|"complete"}` | 无 | 触发 `video_stats.view_count + 1`，同时写入 `reco:exposed:{uid}` 并投递热度打分事件 |
 
 ### 3.4 必测边界用例集合
