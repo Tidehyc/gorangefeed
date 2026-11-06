@@ -70,6 +70,7 @@ type service struct {
 	diversifier     domainfeed.AuthorDiversifier
 	tagLoader       domainfeed.VideoTagLoader
 	tagTimeline     domainfeed.TagTimelineRepository
+	favoriteChecker domainfeed.FavoriteChecker
 	sfGroup         singleflight.Group
 }
 
@@ -111,6 +112,14 @@ func WithTagDependencies(loader domainfeed.VideoTagLoader, timeline domainfeed.T
 	return func(s *service) {
 		s.tagLoader = loader
 		s.tagTimeline = timeline
+	}
+}
+
+// WithFavoriteChecker injects the viewer-scoped favorite lookup used by the interaction bar.
+// Optional: without it every card reports is_favorited=false.
+func WithFavoriteChecker(checker domainfeed.FavoriteChecker) Option {
+	return func(s *service) {
+		s.favoriteChecker = checker
 	}
 }
 
@@ -615,6 +624,15 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 		}
 	}
 
+	// 3a. Load viewer favorite state in one batch. Optional dependency: without it the bar
+	// simply renders the empty heart, which is the correct state for guests anyway.
+	favoritedMap := make(map[int64]bool)
+	if viewerID > 0 && s.favoriteChecker != nil {
+		if m, err := s.favoriteChecker.BatchIsFavorited(ctx, viewerID, videoIDs); err == nil {
+			favoritedMap = m
+		}
+	}
+
 	// 3b. Load tag chips for the page in one batch. A failure here degrades the page to "no tags"
 	// instead of failing the feed: tags are decoration for the client, not part of the contract.
 	tagMap := make(map[int64][]string)
@@ -655,6 +673,7 @@ func (s *service) hydrateVideoIDs(ctx context.Context, videoIDs []int64, viewerI
 			Stats:       stat,
 			IsLiked:     likedMap[id],
 			IsFollowed:  itemFollowed,
+			IsFavorited: favoritedMap[id],
 			Tags:        tagMap[id],
 		})
 	}

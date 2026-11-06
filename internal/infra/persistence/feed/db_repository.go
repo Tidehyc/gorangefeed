@@ -234,23 +234,25 @@ func (r *feedDBRepository) fetchStats(ctx context.Context, videoIDs []int64) map
 	}
 
 	type statRow struct {
-		VideoID      int64 `gorm:"column:video_id"`
-		LikeCount    int64 `gorm:"column:like_count"`
-		CommentCount int64 `gorm:"column:comment_count"`
-		ViewCount    int64 `gorm:"column:view_count"`
+		VideoID       int64 `gorm:"column:video_id"`
+		LikeCount     int64 `gorm:"column:like_count"`
+		CommentCount  int64 `gorm:"column:comment_count"`
+		ViewCount     int64 `gorm:"column:view_count"`
+		FavoriteCount int64 `gorm:"column:favorite_count"`
 	}
 
 	var stats []statRow
 	if err := r.db.WithContext(ctx).Table("video_stats").
-		Select("video_id, like_count, comment_count, view_count").
+		Select("video_id, like_count, comment_count, view_count, favorite_count").
 		Where("video_id IN (?)", videoIDs).
 		Find(&stats).Error; err == nil {
 		for _, s := range stats {
 			statMap[s.VideoID] = &domainfeed.FeedStat{
-				VideoID:      s.VideoID,
-				LikeCount:    s.LikeCount,
-				CommentCount: s.CommentCount,
-				ViewCount:    s.ViewCount,
+				VideoID:       s.VideoID,
+				LikeCount:     s.LikeCount,
+				CommentCount:  s.CommentCount,
+				ViewCount:     s.ViewCount,
+				FavoriteCount: s.FavoriteCount,
 			}
 		}
 	}

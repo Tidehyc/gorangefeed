@@ -85,7 +85,9 @@ type LoginResponse struct {
 }
 
 // ToUserProfileResponse converts an internal User entity to UserProfileResponse.
-func ToUserProfileResponse(u *domainaccount.User) UserProfileResponse {
+// The stats argument is passed explicitly instead of defaulted so a new call site cannot
+// silently ship a profile with four zeroes.
+func ToUserProfileResponse(u *domainaccount.User, stats domainaccount.ProfileStats) UserProfileResponse {
 	return UserProfileResponse{
 		ID:        u.ID,
 		Username:  u.Username,
@@ -94,17 +96,26 @@ func ToUserProfileResponse(u *domainaccount.User) UserProfileResponse {
 		Bio:       u.Bio,
 		Status:    u.Status,
 		CreatedAt: u.CreatedAt,
-		Stats:     UserStats{},
+		Stats:     toUserStats(stats),
 	}
 }
 
 // ToPublicUserProfileResponse converts an internal User entity to PublicUserProfileResponse.
-func ToPublicUserProfileResponse(u *domainaccount.User) PublicUserProfileResponse {
+func ToPublicUserProfileResponse(u *domainaccount.User, stats domainaccount.ProfileStats) PublicUserProfileResponse {
 	return PublicUserProfileResponse{
 		ID:        u.ID,
 		Nickname:  u.Nickname,
 		AvatarURL: u.AvatarURL,
 		Bio:       u.Bio,
-		Stats:     UserStats{},
+		Stats:     toUserStats(stats),
+	}
+}
+
+func toUserStats(s domainaccount.ProfileStats) UserStats {
+	return UserStats{
+		FollowingCount: s.FollowingCount,
+		FollowerCount:  s.FollowerCount,
+		WorkCount:      s.WorkCount,
+		TotalLikes:     s.TotalLikes,
 	}
 }

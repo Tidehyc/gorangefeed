@@ -1,6 +1,7 @@
 package account
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -51,7 +52,9 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	response.Success(c, http.StatusCreated, ToUserProfileResponse(user))
+	// A freshly registered account has no relations and no works, so the counters are known to
+	// be zero without a round trip.
+	response.Success(c, http.StatusCreated, ToUserProfileResponse(user, domainaccount.ProfileStats{}))
 }
 
 // Login handles POST /api/v1/auth/login.
@@ -77,7 +80,7 @@ func (h *Handler) Login(c *gin.Context) {
 
 	response.OK(c, LoginResponse{
 		Tokens: *tokens,
-		User:   ToUserProfileResponse(user),
+		User:   h.toProfileResponse(c.Request.Context(), user),
 	})
 }
 
@@ -133,7 +136,15 @@ func (h *Handler) GetMe(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, ToUserProfileResponse(user))
+	response.OK(c, h.toProfileResponse(c.Request.Context(), user))
+}
+
+// toProfileResponse attaches the aggregated counters to a profile payload. Stats failures are
+// already degraded to zeroes by the service, so this cannot turn a successful profile read into
+// an error response.
+func (h *Handler) toProfileResponse(ctx context.Context, user *domainaccount.User) UserProfileResponse {
+	stats, _ := h.svc.GetProfileStats(ctx, user.ID)
+	return ToUserProfileResponse(user, stats)
 }
 
 // UpdateMe handles PUT /api/v1/users/me (requires JWTAuth).
@@ -159,7 +170,7 @@ func (h *Handler) UpdateMe(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, ToUserProfileResponse(user))
+	response.OK(c, h.toProfileResponse(c.Request.Context(), user))
 }
 
 // ChangePassword handles PUT /api/v1/users/me/password (requires JWTAuth).
@@ -259,5 +270,6 @@ func (h *Handler) GetPublicProfile(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, ToPublicUserProfileResponse(user))
+	stats, _ := h.svc.GetProfileStats(c.Request.Context(), user.ID)
+	response.OK(c, ToPublicUserProfileResponse(user, stats))
 }
