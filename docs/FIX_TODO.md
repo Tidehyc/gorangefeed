@@ -25,10 +25,10 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 | FIX-05 ✅ | P1 | 推荐流翻页重复（page 不参与召回） | `service/feed/service.go:824-961` | S |
 | FIX-06 ✅ | P2 | UID 维度限流写好了但没接线 | `middleware/ratelimit.go:113` | S |
 | FIX-07 | P2 | 文档与实现漂移 5 处 | `README.md`、`docs/*.md` | S |
-| FIX-08 | P2 | E2E 断言缺口（M9-05 声称的验证点没测） | `test/e2e/moderation_lifecycle_test.go` | S |
+| FIX-08 ✅ | P2 | E2E 断言缺口（M9-05 声称的验证点没测） | `test/e2e/moderation_lifecycle_test.go` | S |
 
-进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 / FIX-06 已完成并有测试覆盖**（见文末「已完成项实录」），FIX-07/08 待做。
-FIX-04 未动，改动最大，建议单独一个 PR。
+进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 / FIX-06 / FIX-08 已完成并有测试覆盖**（见文末「已完成项实录」）。
+FIX-07 在 PR #5（纯文档）；只剩 FIX-04（消费端 ack 语义），改动最大，建议单独一个 PR。
 
 
 ---
@@ -230,19 +230,24 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 
 ## FIX-08 · P2 · E2E 断言缺口
 
-- `test/e2e/moderation_lifecycle_test.go` 的封禁用例只断言了 `users.status` 与审计日志，**没测 token 失效** —— 这正是 FIX-02 能长期潜伏的原因。补第 3/4 步断言（旧 access 401、refresh 401）。
-- 推荐流翻页无「两页不重复」断言 —— 与 FIX-05 一起补。
-- 审核通过后的时间线写入无断言（当前只验证状态从 pending 变 published）—— 与 FIX-03 一起补。
+原状：三处「说验证了、其实没验」的地方。
+
+| 缺口 | 现在 | 落在哪个改动里 |
+|---|---|---|
+| 封禁用例只断言 `users.status` 与审计日志，没测 token 失效 —— 这正是 FIX-02 能长期潜伏的原因 | 旧 access → 403、refresh → 401、relogin → 403、`token_revoked=true` 全部断言 | FIX-02（PR #1） |
+| 推荐流翻页无「两页不重复」断言 | `E2E-M4.5-07` 整轮翻页零重复 + 20 页内终止；`E2E-M4.5-08` 同 cursor 幂等 | FIX-05（PR #2） |
+| 审核通过后的时间线写入无断言 | 断言 `timeline:global` 的 score == 视频的 `publish_seq`，且 `publish_seq > 0` 不等于 videoID | 本次（FIX-08） |
 
 ---
 
 ## 建议的推进顺序
 
-1. **FIX-01 + FIX-02 一起做**（同属后台权限闭环，共用一份 E2E：普通用户 403 / admin 200 / 封禁后三种 token 全失效）。
-2. **FIX-03**（改动最小、影响面清晰，适合先落地验证时间线量纲）。
-3. **FIX-04**（触及三处消费者的 ack 语义，改动风险最高，单独一个 PR，跑全量 `./internal/...` + E2E 回归）。
-4. **FIX-05 + FIX-08 的翻页断言**一起。
-5. **FIX-06 / FIX-07** 收尾。
+1. ✅ **FIX-01 + FIX-02 一起做**（同属后台权限闭环，共用一份 E2E：普通用户 403 / admin 200 / 封禁后三种 token 全失效）。
+2. ✅ **FIX-03**（改动最小、影响面清晰，先落地验证时间线量纲）。
+3. ✅ **FIX-05 + FIX-08 的翻页断言**一起。
+4. ✅ **FIX-06**（限流接线）。
+5. ⬜ **FIX-07**（纯文档，PR #5）。
+6. ⬜ **FIX-04**（触及三处消费者的 ack 语义，改动风险最高，单独一个 PR，跑全量 `./internal/...` + E2E 回归）。
 
 每个 PR 的验证口径统一为：`go build ./...` + `go vet ./...` + `go test -p 1 -count=1 ./internal/...` + 对应 E2E 用例；文档类改动只跑 `markdown` 检查即可。
 
@@ -377,3 +382,21 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 
 用独立用户而不是复用 Phase 1 里的 uidA：Phase 1-9 已经消耗了同一分钟内的点赞配额，
 复用会让「第 31 次」这个断言变成随机通过。
+
+### FIX-08 · E2E 断言缺口
+
+三处缺口全部补上，各自跟着对应改动落地（这条本身只新增了最后一项）：
+
+| 缺口 | 断言 | 落在哪 |
+|---|---|---|
+| 封禁只验 `users.status` | 旧 access 调 `/users/me` → 403、`/auth/refresh` → 401、relogin → 403、`token_revoked=true` | FIX-02（PR #1） |
+| 推荐翻页无「两页不重复」 | `E2E-M4.5-07` 整轮零重复且 20 页内终止、`E2E-M4.5-08` 同 cursor 幂等 | FIX-05（PR #2） |
+| 过审后无时间线断言 | `ZScore("timeline:global", videoID) == video.PublishSeq`，且 `PublishSeq > 0`、不等于 videoID | 本条 |
+
+**为什么这条断言能咬住 bug**：`timelineRepo.Append(videoID)` 真实的实现是 `AppendWithSeq(videoID, videoID)`，
+score 直接落成自增主键。用例里的视频是**绕过发布流程**直接 `videoRepo.CreateWithStats` 建的，
+`publish_seq` 为 0，所以只有走「补发号 → 落库 → 用序号写入」这条路径才可能同时满足
+「`publish_seq > 0`」与「score 等于它」两个断言；旧写法连第一个都过不了。
+
+**反证**：把 `s.appendApprovedToTimeline(ctx, videoID)` 改回 `_ = s.timelineRepo.Append(ctx, videoID)` 重跑，
+用例立刻报 `expected approval to assign a publish_seq, got 0`，随后还原。

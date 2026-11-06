@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -261,6 +262,29 @@ func TestM9_ModerationLifecycle_EndToEnd(t *testing.T) {
 		parseJSONResponse(t, revW, &revResp)
 		if revResp.Data.Status != "approved" {
 			t.Fatalf("expected status approved, got %s", revResp.Data.Status)
+		}
+
+		// Approving must index the video into the global timeline under its publish_seq.
+		// timelineRepo.Append(videoID) writes AppendWithSeq(videoID, videoID) — the auto-increment
+		// primary key as the score — which silently misorders the feed. Videos created straight
+		// through the repository (as here, bypassing the publish flow) carry no publish_seq yet,
+		// so approval has to allocate one.
+		approved, err := videoRepo.FindByID(context.Background(), flaggedVideoID)
+		if err != nil {
+			t.Fatalf("failed to reload approved video: %v", err)
+		}
+		if approved.PublishSeq <= 0 {
+			t.Fatalf("expected approval to assign a publish_seq, got %d", approved.PublishSeq)
+		}
+		if approved.PublishSeq == flaggedVideoID {
+			t.Fatalf("publish_seq must not fall back to the video id (%d)", flaggedVideoID)
+		}
+		score, err := ctxExt.RDB.ZScore(context.Background(), "timeline:global", strconv.FormatInt(flaggedVideoID, 10)).Result()
+		if err != nil {
+			t.Fatalf("expected approved video %d to be appended to the global timeline: %v", flaggedVideoID, err)
+		}
+		if int64(score) != approved.PublishSeq {
+			t.Fatalf("timeline score = %v, want publish_seq %d (video id %d)", score, approved.PublishSeq, flaggedVideoID)
 		}
 	})
 
