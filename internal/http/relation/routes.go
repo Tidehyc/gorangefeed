@@ -1,6 +1,8 @@
 package relation
 
 import (
+	"time"
+
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
 	"github.com/Tidehyc/gorangefeed/internal/infra/middleware"
@@ -15,10 +17,14 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore)
 	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore)
 
+	// Follow/unfollow is limited per UID at 30 requests per minute (NFR-SEC-07), mounted after
+	// JWTAuth so the counter is keyed by user rather than by IP.
+	followLimit := middleware.UserRateLimiter(rdb, "follow", 30, time.Minute)
+
 	userGroup := v1.Group("/users")
 	{
-		userGroup.POST("/:userId/follow", jwtAuth, h.Follow)
-		userGroup.DELETE("/:userId/follow", jwtAuth, h.Unfollow)
+		userGroup.POST("/:userId/follow", jwtAuth, followLimit, h.Follow)
+		userGroup.DELETE("/:userId/follow", jwtAuth, followLimit, h.Unfollow)
 		userGroup.GET("/:userId/followings", softAuth, h.ListFollowings)
 		userGroup.GET("/:userId/followers", softAuth, h.ListFollowers)
 		userGroup.GET("/:userId/relation", jwtAuth, h.GetRelation)

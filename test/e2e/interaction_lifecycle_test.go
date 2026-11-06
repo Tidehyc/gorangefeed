@@ -578,6 +578,72 @@ func TestM4_InteractionLifecycle_EndToEnd(t *testing.T) {
 		}
 	}
 
+	// =========================================================================
+	// Phase 10: Per-UID write rate limiting (NFR-SEC-07)
+	// =========================================================================
+	{
+		// A dedicated user keeps this phase's budget independent of the likes/comments the
+		// phases above already spent, and keeps this phase from tripping limits for them.
+		limiterUser := fmt.Sprintf("m4_ratelimit_%s", suffix)
+		uidL, tokenL := registerAndLogin(t, engine, limiterUser, password)
+		if uidL <= 0 {
+			t.Fatalf("failed to register rate limit probe user")
+		}
+
+		// The limiter is 30/minute per UID, so the 31st like must be rejected. The cap on
+		// attempts keeps the test finite if the limiter silently stops applying.
+		const maxAttempts = 40
+		rejectedAt := 0
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/videos/%d/like", v1.Video.ID), nil)
+			req.Header.Set("Authorization", "Bearer "+tokenL)
+			w := httptest.NewRecorder()
+			engine.ServeHTTP(w, req)
+
+			if w.Code == http.StatusTooManyRequests {
+				var body struct {
+					Error *struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				parseJSONResponse(t, w, &body)
+				if body.Error == nil || body.Error.Code != "rate_limited" {
+					t.Fatalf("expected rate_limited error code, got body=%s", w.Body.String())
+				}
+				rejectedAt = attempt
+				break
+			}
+			if w.Code != http.StatusOK {
+				t.Fatalf("like attempt %d failed: code=%d, body=%s", attempt, w.Code, w.Body.String())
+			}
+		}
+
+		if rejectedAt == 0 {
+			t.Fatalf("expected 429 within %d like attempts, limiter never tripped", maxAttempts)
+		}
+		if rejectedAt != 31 {
+			t.Fatalf("expected the 31st like to be rejected (30/min), got attempt %d", rejectedAt)
+		}
+
+		// The counter is keyed by UID, not by IP: another user is unaffected.
+		reqOther, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("/api/v1/videos/%d/like", v2.Video.ID), nil)
+		reqOther.Header.Set("Authorization", "Bearer "+tokenA)
+		wOther := httptest.NewRecorder()
+		engine.ServeHTTP(wOther, reqOther)
+		if wOther.Code == http.StatusTooManyRequests {
+			t.Fatalf("another user must not share the rate limit bucket, got 429")
+		}
+
+		// The window is bounded: the key must expire rather than accumulate forever.
+		ttl, err := rdb.TTL(context.Background(), fmt.Sprintf("ratelimit:like:uid:%d", uidL)).Result()
+		if err != nil {
+			t.Fatalf("failed to read rate limit key ttl: %v", err)
+		}
+		if ttl <= 0 || ttl > time.Minute {
+			t.Fatalf("expected rate limit key ttl in (0, 1m], got %v", ttl)
+		}
+	}
+
 	_ = c1ID
 	_ = c2ID
 }
