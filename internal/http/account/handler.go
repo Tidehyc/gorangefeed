@@ -162,6 +162,54 @@ func (h *Handler) UpdateMe(c *gin.Context) {
 	response.OK(c, ToUserProfileResponse(user))
 }
 
+// ChangePassword handles PUT /api/v1/users/me/password (requires JWTAuth).
+// Every token issued before the change stops working, including the caller's own, so the client
+// is expected to sign in again with the new password.
+func (h *Handler) ChangePassword(c *gin.Context) {
+	userID := middleware.MustGetUserID(c)
+
+	var req ChangePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, response.ErrInvalidParam("Invalid request format"))
+		return
+	}
+
+	if req.OldPassword == "" || req.NewPassword == "" {
+		response.Fail(c, response.ErrInvalidParam("old_password and new_password are required"))
+		return
+	}
+
+	if err := h.svc.ChangePassword(c.Request.Context(), userID, req.OldPassword, req.NewPassword); err != nil {
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, gin.H{"message": "Password updated, please sign in again"})
+}
+
+// DeleteAccount handles DELETE /api/v1/users/me (requires JWTAuth).
+func (h *Handler) DeleteAccount(c *gin.Context) {
+	userID := middleware.MustGetUserID(c)
+
+	var req DeleteAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, response.ErrInvalidParam("Invalid request format"))
+		return
+	}
+
+	if req.Password == "" {
+		response.Fail(c, response.ErrInvalidParam("password is required"))
+		return
+	}
+
+	if err := h.svc.DeleteAccount(c.Request.Context(), userID, req.Password); err != nil {
+		response.Fail(c, err)
+		return
+	}
+
+	response.OK(c, gin.H{"message": "Account deleted"})
+}
+
 // UploadAvatar handles POST /api/v1/users/avatar (requires JWTAuth).
 func (h *Handler) UploadAvatar(c *gin.Context) {
 	userID := middleware.MustGetUserID(c)

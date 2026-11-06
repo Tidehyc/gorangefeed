@@ -35,6 +35,18 @@ type UpdateProfileRequest struct {
 	Bio      string `json:"bio"`
 }
 
+// ChangePasswordRequest represents the JSON payload for PUT /api/v1/users/me/password.
+type ChangePasswordRequest struct {
+	OldPassword string `json:"old_password"`
+	NewPassword string `json:"new_password"`
+}
+
+// DeleteAccountRequest represents the JSON payload for DELETE /api/v1/users/me.
+// The password is required so a stolen access token alone cannot destroy an account.
+type DeleteAccountRequest struct {
+	Password string `json:"password"`
+}
+
 // UserStats contains aggregated social and content metrics.
 // Pre-allocated in M1 with default 0s, to be populated in M2/M4.
 type UserStats struct {

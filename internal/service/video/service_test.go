@@ -76,6 +76,10 @@ func (m *mockVideoRepo) UpdatePublishSeq(ctx context.Context, id int64, publishS
 	return nil
 }
 
+func (m *mockVideoRepo) HideAllByAuthor(ctx context.Context, authorID int64) (int64, error) {
+	return 0, nil
+}
+
 // mockAccountRepo implements domainaccount.Repository for service unit testing.
 type mockAccountRepo struct {
 	findByIDFn func(ctx context.Context, id int64) (*domainaccount.User, error)
@@ -106,6 +110,14 @@ func (m *mockAccountRepo) UpdateStatus(ctx context.Context, id int64, status dom
 	return nil
 }
 
+func (m *mockAccountRepo) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	return nil
+}
+
+func (m *mockAccountRepo) Anonymize(ctx context.Context, id int64) error {
+	return nil
+}
+
 func TestService_PublishSuccess(t *testing.T) {
 	repo := &mockVideoRepo{
 		createWithStatsFn: func(ctx context.Context, video *domainvideo.Video, stats *domainvideo.VideoStats) error {
@@ -118,7 +130,7 @@ func TestService_PublishSuccess(t *testing.T) {
 	accountRepo := &mockAccountRepo{}
 	svc := servicevideo.NewService(repo, accountRepo)
 
-	detail, err := svc.Publish(context.Background(), 1, "Awesome Video", "Desc", "http://example.com/play.mp4", "http://example.com/cover.jpg", 30000, "key123")
+	detail, err := svc.Publish(context.Background(), 1, "Awesome Video", "Desc", "http://example.com/play.mp4", "http://example.com/cover.jpg", 30000, "key123", nil)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -135,19 +147,19 @@ func TestService_PublishValidationErrors(t *testing.T) {
 	ctx := context.Background()
 
 	// Missing title
-	_, err := svc.Publish(ctx, 1, "", "Desc", "http://example.com/play.mp4", "", 10, "")
+	_, err := svc.Publish(ctx, 1, "", "Desc", "http://example.com/play.mp4", "", 10, "", nil)
 	if err == nil {
 		t.Fatal("expected error on empty title, got nil")
 	}
 
 	// Missing play URL
-	_, err = svc.Publish(ctx, 1, "Title", "Desc", "", "", 10, "")
+	_, err = svc.Publish(ctx, 1, "Title", "Desc", "", "", 10, "", nil)
 	if err == nil {
 		t.Fatal("expected error on empty playURL, got nil")
 	}
 
 	// Invalid author ID
-	_, err = svc.Publish(ctx, 0, "Title", "Desc", "http://example.com/play.mp4", "", 10, "")
+	_, err = svc.Publish(ctx, 0, "Title", "Desc", "http://example.com/play.mp4", "", 10, "", nil)
 	if err == nil {
 		t.Fatal("expected error on invalid author ID, got nil")
 	}
@@ -179,7 +191,7 @@ func TestService_PublishIdempotentReplay(t *testing.T) {
 	}
 	svc := servicevideo.NewService(repo, &mockAccountRepo{})
 
-	detail, err := svc.Publish(context.Background(), 1, "New Title", "Desc", "http://example.com/play.mp4", "", 10, "idem_key_hit")
+	detail, err := svc.Publish(context.Background(), 1, "New Title", "Desc", "http://example.com/play.mp4", "", 10, "idem_key_hit", nil)
 	if err != nil {
 		t.Fatalf("expected no error on idempotent replay, got %v", err)
 	}

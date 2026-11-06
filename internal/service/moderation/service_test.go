@@ -117,6 +117,10 @@ func (m *mockVideoRepoForMod) UpdatePublishSeq(ctx context.Context, id int64, pu
 	return nil
 }
 
+func (m *mockVideoRepoForMod) HideAllByAuthor(ctx context.Context, authorID int64) (int64, error) {
+	return 0, nil
+}
+
 type mockSeqAllocatorForMod struct {
 	seq   int64
 	calls int
@@ -178,6 +182,12 @@ func (m *mockAccountRepoForMod) UpdateAvatar(ctx context.Context, id int64, avat
 }
 func (m *mockAccountRepoForMod) UpdateStatus(ctx context.Context, id int64, status domainaccount.UserStatus) error {
 	m.userStatus[id] = status
+	return nil
+}
+func (m *mockAccountRepoForMod) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	return nil
+}
+func (m *mockAccountRepoForMod) Anonymize(ctx context.Context, id int64) error {
 	return nil
 }
 

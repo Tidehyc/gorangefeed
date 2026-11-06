@@ -15,7 +15,7 @@ import (
 // Service defines application use cases for video publication and management.
 type Service interface {
 	// Publish creates and publishes a new video with initial stats, supporting idempotency.
-	Publish(ctx context.Context, authorID int64, title, description, playURL, coverURL string, durationMs int, idempotencyKey string) (*domainvideo.VideoDetail, error)
+	Publish(ctx context.Context, authorID int64, title, description, playURL, coverURL string, durationMs int, idempotencyKey string, tags []string) (*domainvideo.VideoDetail, error)
 
 	// GetDetail retrieves the public video details, engagement counts, and author profile.
 	GetDetail(ctx context.Context, videoID int64, currentUserID int64) (*domainvideo.VideoDetail, error)
@@ -40,7 +40,7 @@ func NewService(repo domainvideo.Repository, accountRepo domainaccount.Repositor
 	}
 }
 
-func (s *service) Publish(ctx context.Context, authorID int64, title, description, playURL, coverURL string, durationMs int, idempotencyKey string) (*domainvideo.VideoDetail, error) {
+func (s *service) Publish(ctx context.Context, authorID int64, title, description, playURL, coverURL string, durationMs int, idempotencyKey string, tags []string) (*domainvideo.VideoDetail, error) {
 	if authorID <= 0 {
 		return nil, response.ErrUnauthorized("Invalid user credentials")
 	}
@@ -50,6 +50,11 @@ func (s *service) Publish(ctx context.Context, authorID int64, title, descriptio
 	playURL = strings.TrimSpace(playURL)
 	coverURL = strings.TrimSpace(coverURL)
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
+
+	parsedTags, err := domainvideo.ParseTags(tags)
+	if err != nil {
+		return nil, response.ErrInvalidParam(err.Error())
+	}
 
 	var idemKeyPtr *string
 	if idempotencyKey != "" {
@@ -74,6 +79,7 @@ func (s *service) Publish(ctx context.Context, authorID int64, title, descriptio
 		DurationMs:     durationMs,
 		Status:         domainvideo.VideoStatusPublished,
 		IdempotencyKey: idemKeyPtr,
+		Tags:           parsedTags,
 	}
 
 	if err := video.Validate(); err != nil {

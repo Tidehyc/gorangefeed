@@ -100,6 +100,14 @@ func (m *mockTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, 
 	return false, nil
 }
 
+func (m *mockTokenStore) InvalidateUserTokens(ctx context.Context, userID int64, invalidBefore time.Time, ttl time.Duration) error {
+	return nil
+}
+
+func (m *mockTokenStore) IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error) {
+	return false, nil
+}
+
 func setupTestRouter(svc *mockService, hub *mockHub) (*gin.Engine, *jwt.TokenManager, string) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

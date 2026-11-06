@@ -184,7 +184,7 @@ func TestMultiSourceRecallEngine_Recall(t *testing.T) {
 	engine := servicefeed.NewMultiSourceRecallEngine(hotStore, timelineRepo, dbRepo)
 
 	// Test 1: Full multi-source recall
-	candidates, err := engine.Recall(ctx, 10, 123456)
+	candidates, err := engine.Recall(ctx, 0, 10, 123456)
 	if err != nil {
 		t.Fatalf("unexpected recall error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestMultiSourceRecallEngine_Recall(t *testing.T) {
 	// Test 2: Hot store fallback to DB like rank
 	emptyHotStore := &mockHotStoreForRecall{snapshotIDs: []int64{}}
 	engineWithEmptyHot := servicefeed.NewMultiSourceRecallEngine(emptyHotStore, timelineRepo, dbRepo)
-	fallbackCandidates, err := engineWithEmptyHot.Recall(ctx, 10, 123456)
+	fallbackCandidates, err := engineWithEmptyHot.Recall(ctx, 0, 10, 123456)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestMultiSourceRecallEngine_Recall(t *testing.T) {
 		},
 	}
 	sparseEngine := servicefeed.NewMultiSourceRecallEngine(nil, nil, sparseDB)
-	sparseCandidates, err := sparseEngine.Recall(ctx, 5, 0)
+	sparseCandidates, err := sparseEngine.Recall(ctx, 0, 5, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

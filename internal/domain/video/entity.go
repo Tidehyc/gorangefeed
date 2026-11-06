@@ -36,6 +36,9 @@ type Video struct {
 	PublishedAt    time.Time   `json:"published_at"`
 	CreatedAt      time.Time   `json:"created_at"`
 	UpdatedAt      time.Time   `json:"updated_at"`
+	// Tags is hydrated from the video_tags relation rather than a column on videos. It is carried
+	// on the entity so publishing can persist tags inside the same transaction as the video.
+	Tags []Tag `json:"tags,omitempty"`
 }
 
 // IsPublished checks if video is in published state.

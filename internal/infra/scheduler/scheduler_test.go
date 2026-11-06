@@ -149,6 +149,10 @@ func (m *mockVideoRepoForScheduler) UpdatePublishSeq(ctx context.Context, id int
 	return nil
 }
 
+func (m *mockVideoRepoForScheduler) HideAllByAuthor(ctx context.Context, authorID int64) (int64, error) {
+	return 0, nil
+}
+
 type mockTimelineRepoForScheduler struct {
 	mu           sync.Mutex
 	appendedID   int64

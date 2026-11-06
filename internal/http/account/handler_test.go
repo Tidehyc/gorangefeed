@@ -90,6 +90,26 @@ func (m *mockRepository) UpdateStatus(ctx context.Context, id int64, status doma
 	return nil
 }
 
+func (m *mockRepository) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.PasswordHash = passwordHash
+	return nil
+}
+
+func (m *mockRepository) Anonymize(ctx context.Context, id int64) error {
+	u, ok := m.usersByID[id]
+	if !ok {
+		return domainaccount.ErrUserNotFound
+	}
+	u.Nickname = "已注销用户"
+	u.AvatarURL = ""
+	u.Bio = ""
+	return nil
+}
+
 type mockTokenStore struct {
 	sessions    map[string]string
 	blacklisted map[string]bool
@@ -150,6 +170,14 @@ func (m *mockTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, 
 	return m.banned[userID], nil
 }
 
+func (m *mockTokenStore) InvalidateUserTokens(ctx context.Context, userID int64, invalidBefore time.Time, ttl time.Duration) error {
+	return nil
+}
+
+func (m *mockTokenStore) IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error) {
+	return false, nil
+}
+
 func setupTestHandler(t *testing.T) (*Handler, serviceaccount.Service, *jwt.TokenManager, *storage.AvatarStorage, string) {
 	tempDir, err := os.MkdirTemp("", "gorangefeed_handler_test_*")
 	if err != nil {
@@ -191,6 +219,8 @@ func setupTestEngine(h *Handler, jwtMgr *jwt.TokenManager) *gin.Engine {
 	{
 		userGroup.GET("/me", middleware.JWTAuth(jwtMgr, nil), h.GetMe)
 		userGroup.PUT("/me", middleware.JWTAuth(jwtMgr, nil), h.UpdateMe)
+		userGroup.PUT("/me/password", middleware.JWTAuth(jwtMgr, nil), h.ChangePassword)
+		userGroup.DELETE("/me", middleware.JWTAuth(jwtMgr, nil), h.DeleteAccount)
 		userGroup.POST("/avatar", middleware.JWTAuth(jwtMgr, nil), h.UploadAvatar)
 		userGroup.GET("/:userId", h.GetPublicProfile)
 	}

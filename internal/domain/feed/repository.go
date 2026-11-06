@@ -124,7 +124,25 @@ type HotTimelineStore interface {
 // RecallEngine provides multi-source video candidates retrieval for the recommendation feed.
 type RecallEngine interface {
 	// Recall retrieves candidate video IDs aggregated from hot, latest, and exploratory pools.
-	Recall(ctx context.Context, targetCount int, seed int64) ([]int64, error)
+	//
+	// viewerID is carried so the M11-01 interest-vector recall can filter candidates by the
+	// viewer's tag profile without changing this contract again. Today's hot/latest/explore pools
+	// are viewer-agnostic and ignore it; 0 means an anonymous viewer.
+	Recall(ctx context.Context, viewerID int64, targetCount int, seed int64) ([]int64, error)
+}
+
+// VideoTagLoader supplies the tag chips attached to feed items. Implementations live in the tag
+// read model; a feed service constructed without one simply returns items without tags.
+type VideoTagLoader interface {
+	// ListVideoTags returns display names per video ID.
+	ListVideoTags(ctx context.Context, videoIDs []int64) (map[int64][]string, error)
+}
+
+// TagTimelineRepository resolves a tag to its published videos in reverse chronological order.
+type TagTimelineRepository interface {
+	// ListVideoIDsByTag returns a page of video IDs carrying the normalized tag name, the cursor to
+	// pass for the next page (0 when exhausted) and whether more rows exist.
+	ListVideoIDsByTag(ctx context.Context, tagName string, cursor int64, limit int) ([]int64, int64, bool, error)
 }
 
 // AuthorDiversifier ensures authors are diversified within a feed page using a sliding window.

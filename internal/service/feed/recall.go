@@ -27,11 +27,16 @@ func NewMultiSourceRecallEngine(
 	}
 }
 
+// Recall aggregates the hot, latest and exploratory pools. viewerID is accepted for the M11-01
+// interest-vector recall but is deliberately unused today: none of the three pools are
+// viewer-aware, and pretending otherwise would hide that the personalisation work is not done.
 func (e *multiSourceRecallEngine) Recall(
 	ctx context.Context,
+	viewerID int64,
 	targetCount int,
 	seed int64,
 ) ([]int64, error) {
+	_ = viewerID
 	if targetCount <= 0 {
 		targetCount = 30
 	}

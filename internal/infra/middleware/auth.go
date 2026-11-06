@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"strings"
+	"time"
 
 	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	"github.com/Tidehyc/gorangefeed/internal/infra/jwt"
@@ -20,6 +21,9 @@ const (
 type AuthStateChecker interface {
 	IsAccessTokenBlacklisted(ctx context.Context, tokenID string) (bool, error)
 	IsUserBanned(ctx context.Context, userID int64) (bool, error)
+	// IsUserTokenInvalidated reports whether the account retired this token's issue time, e.g.
+	// after a password change or account deletion that must log out other devices.
+	IsUserTokenInvalidated(ctx context.Context, userID int64, issuedAt time.Time) (bool, error)
 }
 
 // RoleResolver loads a user record so RequireRole can enforce a permission scope.
@@ -65,6 +69,25 @@ func isBlacklisted(c *gin.Context, state AuthStateChecker, tokenID string) bool 
 	return err == nil && revoked
 }
 
+// isCredentialStale reports whether the owning account retired tokens issued at this time.
+// A lookup failure is treated as "not stale", matching isBanned: a Redis hiccup must not log
+// every user out, and the token still has to pass signature and expiry verification.
+func isCredentialStale(c *gin.Context, state AuthStateChecker, userID int64, issuedAt time.Time) bool {
+	if state == nil || userID <= 0 || issuedAt.IsZero() {
+		return false
+	}
+	stale, err := state.IsUserTokenInvalidated(c.Request.Context(), userID, issuedAt)
+	return err == nil && stale
+}
+
+// accessTokenIssuedAt returns the token's issue time, tolerating a token that omits `iat`.
+func accessTokenIssuedAt(claims *jwt.AccessClaims) time.Time {
+	if claims == nil || claims.IssuedAt == nil {
+		return time.Time{}
+	}
+	return claims.IssuedAt.Time
+}
+
 // JWTAuth enforces authentication. Requests without a valid token are rejected with 401 Unauthorized.
 func JWTAuth(jwtMgr *jwt.TokenManager, state AuthStateChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -84,6 +107,12 @@ func JWTAuth(jwtMgr *jwt.TokenManager, state AuthStateChecker) gin.HandlerFunc {
 
 		if isBlacklisted(c, state, claims.TokenID) {
 			response.Fail(c, response.ErrUnauthorized("Token has been revoked"))
+			c.Abort()
+			return
+		}
+
+		if isCredentialStale(c, state, claims.UserID, accessTokenIssuedAt(claims)) {
+			response.Fail(c, response.ErrUnauthorized("Credentials have changed, please sign in again"))
 			c.Abort()
 			return
 		}
@@ -115,7 +144,9 @@ func SoftJWTAuth(jwtMgr *jwt.TokenManager, state AuthStateChecker) gin.HandlerFu
 		if err == nil && claims != nil {
 			// A revoked token or a banned owner degrades to guest rather than failing the
 			// request, because these routes are also readable anonymously.
-			if !isBlacklisted(c, state, claims.TokenID) && !isBanned(c, state, claims.UserID) {
+			if !isBlacklisted(c, state, claims.TokenID) &&
+				!isCredentialStale(c, state, claims.UserID, accessTokenIssuedAt(claims)) &&
+				!isBanned(c, state, claims.UserID) {
 				c.Set(ContextKeyUserID, claims.UserID)
 				c.Set(ContextKeyTokenID, claims.TokenID)
 			}

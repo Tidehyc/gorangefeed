@@ -68,6 +68,12 @@ func (r *gormRepository) CreateWithStatsAndOutbox(ctx context.Context, video *do
 		stats.CreatedAt = statModel.CreatedAt
 		stats.UpdatedAt = statModel.UpdatedAt
 
+		// Tags join the same transaction as the video: a published video whose tags failed to
+		// persist would silently disappear from every tag-driven recall.
+		if err := replaceVideoTagsTx(tx, video.ID, video.Tags); err != nil {
+			return err
+		}
+
 		if outboxEvent != nil {
 			outboxEvent.Payload, _ = json.Marshal(map[string]any{
 				"video_id":     video.ID,
@@ -102,6 +108,12 @@ func (r *gormRepository) FindDetailByID(ctx context.Context, id int64) (*domainv
 	if err != nil {
 		return nil, nil, err
 	}
+
+	tagMap, tagErr := loadTagsByVideoIDs(ctx, r.db, []int64{id})
+	if tagErr != nil {
+		return nil, nil, tagErr
+	}
+	v.Tags = tagMap[id]
 
 	var statModel VideoStatModel
 	statErr := r.db.WithContext(ctx).Where("video_id = ?", id).First(&statModel).Error
@@ -231,6 +243,23 @@ func (r *gormRepository) UpdateStatus(ctx context.Context, id int64, authorID in
 	}
 
 	return nil
+}
+
+// HideAllByAuthor hides every published video owned by authorID in one statement. Only rows that
+// are currently published are touched, so the returned count means "videos that actually left the
+// feed" rather than "videos owned". Timelines keep their video IDs; feed assembly filters on
+// status = 1 when it hydrates them, so hidden entries stop surfacing without a cache purge.
+func (r *gormRepository) HideAllByAuthor(ctx context.Context, authorID int64) (int64, error) {
+	if authorID <= 0 {
+		return 0, nil
+	}
+	res := r.db.WithContext(ctx).Model(&VideoModel{}).
+		Where("author_id = ? AND status = ?", authorID, int8(domainvideo.VideoStatusPublished)).
+		Update("status", int8(domainvideo.VideoStatusHidden))
+	if res.Error != nil {
+		return 0, fmt.Errorf("hide videos by author error: %w", res.Error)
+	}
+	return res.RowsAffected, nil
 }
 
 func (r *gormRepository) UpdatePublishSeq(ctx context.Context, id int64, publishSeq int64) error {

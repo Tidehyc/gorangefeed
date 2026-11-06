@@ -74,6 +74,10 @@ func (m *mockFeedService) ListHotFeed(ctx context.Context, viewerID int64, curso
 	return m.GetHotFeed(ctx, viewerID, cursor, limit)
 }
 
+func (m *mockFeedService) GetTagFeed(ctx context.Context, viewerID int64, tag string, cursor int64, limit int) (*domainfeed.FeedPage, error) {
+	return &domainfeed.FeedPage{Items: []*domainfeed.FeedItem{}}, nil
+}
+
 func (m *mockFeedService) GetRecommendFeed(ctx context.Context, viewerID int64, cursor string, limit int) (*domainfeed.RecommendFeedPage, error) {
 	if m.getRecommendFeedFn != nil {
 		return m.getRecommendFeedFn(ctx, viewerID, cursor, limit)

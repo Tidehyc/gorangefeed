@@ -151,10 +151,11 @@ Feed 读接口大多为软鉴权（游客可访问，带 token 时注入 `is_lik
 
 | 模块 | 代表接口 | 鉴权 |
 |---|---|---|
-| 账号 | `POST /auth/register`、`POST /auth/refresh`、`GET /users/me` | 公开 / 登录 |
+| 账号 | `POST /auth/register`、`POST /auth/refresh`、`GET /users/me`、`PUT /users/me/password`、`DELETE /users/me` | 公开 / 登录 |
 | 视频 | `GET /videos/:videoId`、`DELETE /videos/:videoId`、`GET /users/:userId/videos` | 软鉴权 / 登录 |
 | 分片上传 | `POST /videos/chunk/init`、`POST /videos/chunk/upload`、`POST /videos/chunk/complete` | 登录 |
 | Feed | `GET /feed/global`、`GET /feed/following`、`GET /feed/hot`、`GET /feed/recommend`、`GET /feed/like-rank` | 软鉴权（关注流需登录） |
+| 话题 | `GET /tags/:tag/videos` | 软鉴权 |
 | 互动 | `POST /videos/:videoId/like`、`POST /videos/:videoId/comments`、`GET /users/me/likes` | 登录 |
 | 关注 | `POST /users/:userId/follow`、`GET /users/:userId/followers` | 登录 / 软鉴权 |
 | 收藏与历史 | `POST /user/favorites`、`GET /user/history`、`POST /videos/:videoId/history` | 登录 |
