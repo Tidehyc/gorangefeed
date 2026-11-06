@@ -93,12 +93,14 @@ func (m *mockRepository) UpdateStatus(ctx context.Context, id int64, status doma
 type mockTokenStore struct {
 	sessions    map[string]string
 	blacklisted map[string]bool
+	banned      map[int64]bool
 }
 
 func newMockTokenStore() *mockTokenStore {
 	return &mockTokenStore{
 		sessions:    make(map[string]string),
 		blacklisted: make(map[string]bool),
+		banned:      make(map[int64]bool),
 	}
 }
 
@@ -132,6 +134,20 @@ func (m *mockTokenStore) BlacklistAccessToken(ctx context.Context, tokenID strin
 
 func (m *mockTokenStore) IsAccessTokenBlacklisted(ctx context.Context, tokenID string) (bool, error) {
 	return m.blacklisted[tokenID], nil
+}
+
+func (m *mockTokenStore) MarkUserBanned(ctx context.Context, userID int64, ttl time.Duration) error {
+	m.banned[userID] = true
+	return nil
+}
+
+func (m *mockTokenStore) ClearUserBanned(ctx context.Context, userID int64) error {
+	delete(m.banned, userID)
+	return nil
+}
+
+func (m *mockTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, error) {
+	return m.banned[userID], nil
 }
 
 func setupTestHandler(t *testing.T) (*Handler, serviceaccount.Service, *jwt.TokenManager, *storage.AvatarStorage, string) {

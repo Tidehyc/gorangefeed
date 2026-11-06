@@ -12,7 +12,7 @@ import (
 func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenStore domainaccount.TokenStore, rdb *redis.Client) {
 	v1 := r.Group("/api/v1/creator")
 
-	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
+	jwtAuth := middleware.JWTAuth(jwtMgr, tokenStore)
 
 	// Draft management
 	v1.POST("/drafts", jwtAuth, h.SaveDraft)

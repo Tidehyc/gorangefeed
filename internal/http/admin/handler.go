@@ -162,7 +162,8 @@ func (h *Handler) BanUser(c *gin.Context) {
 
 	operatorID := middleware.MustGetUserID(c)
 
-	if err := h.svc.BanUser(c.Request.Context(), userID, operatorID, req.Reason); err != nil {
+	credentialsRevoked, err := h.svc.BanUser(c.Request.Context(), userID, operatorID, req.Reason)
+	if err != nil {
 		response.Fail(c, response.ErrInternal(err.Error()))
 		return
 	}
@@ -170,7 +171,35 @@ func (h *Handler) BanUser(c *gin.Context) {
 	response.OK(c, gin.H{
 		"user_id":       userID,
 		"status":        "suspended",
-		"token_revoked": true,
+		"token_revoked": credentialsRevoked,
 	})
 }
 
+// UnbanUserRequest represents body for lifting a user suspension.
+type UnbanUserRequest struct {
+	Reason string `json:"reason"`
+}
+
+// UnbanUser handles POST /api/v1/admin/users/:id/unban.
+func (h *Handler) UnbanUser(c *gin.Context) {
+	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || userID <= 0 {
+		response.Fail(c, response.ErrInvalidParam("invalid user id"))
+		return
+	}
+
+	var req UnbanUserRequest
+	_ = c.ShouldBindJSON(&req)
+
+	operatorID := middleware.MustGetUserID(c)
+
+	if err := h.svc.UnbanUser(c.Request.Context(), userID, operatorID, req.Reason); err != nil {
+		response.Fail(c, response.ErrInternal(err.Error()))
+		return
+	}
+
+	response.OK(c, gin.H{
+		"user_id": userID,
+		"status":  "active",
+	})
+}

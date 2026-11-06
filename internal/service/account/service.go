@@ -67,6 +67,7 @@ func (s *service) Register(ctx context.Context, username, password string) (*dom
 		PasswordHash: hash,
 		Nickname:     username,
 		Status:       domainaccount.UserStatusActive,
+		Role:         domainaccount.RoleUser,
 	}
 
 	if err := s.repo.Create(ctx, user); err != nil {
@@ -128,6 +129,14 @@ func (s *service) RefreshToken(ctx context.Context, refreshTokenStr string) (*To
 	refClaims, err := s.jwtManager.VerifyRefreshToken(refreshTokenStr)
 	if err != nil {
 		return nil, response.ErrUnauthorized("Invalid or expired refresh token")
+	}
+
+	// Suspension must terminate the refresh chain, otherwise a banned account can keep minting
+	// access tokens forever while its access tokens are being rejected one by one.
+	user, err := s.repo.FindByID(ctx, refClaims.UserID)
+	if err != nil || user.Status != domainaccount.UserStatusActive {
+		_ = s.tokenStore.RevokeSession(ctx, refClaims.SessionID)
+		return nil, response.ErrUnauthorized("User account is inactive or suspended")
 	}
 
 	newTokenID := uuid.NewString()

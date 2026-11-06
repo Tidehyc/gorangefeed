@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	domainaccount "github.com/Tidehyc/gorangefeed/internal/domain/account"
 	domainmoderation "github.com/Tidehyc/gorangefeed/internal/domain/moderation"
 	domainvideo "github.com/Tidehyc/gorangefeed/internal/domain/video"
+	httpaccount "github.com/Tidehyc/gorangefeed/internal/http/account"
+	"github.com/gin-gonic/gin"
 )
 
 type adminReviewListEnvelope struct {
@@ -35,9 +38,9 @@ type adminReviewActionEnvelope struct {
 type adminTakedownEnvelope struct {
 	Code int `json:"code"`
 	Data struct {
-		VideoID      int64 `json:"video_id"`
+		VideoID      int64  `json:"video_id"`
 		Status       string `json:"status"`
-		IndexRevoked bool  `json:"index_revoked"`
+		IndexRevoked bool   `json:"index_revoked"`
 	} `json:"data"`
 }
 
@@ -67,11 +70,30 @@ func TestM9_ModerationLifecycle_EndToEnd(t *testing.T) {
 	adminUsername := fmt.Sprintf("admin_mod_%s", suffix)
 	testPass := "SecurePass123"
 
-	// 1. Register Author & Admin users
-	authorID, _ := registerAndLogin(t, engine, authorUsername, testPass)
+	// 1. Register Author & Admin users. Roles are granted out-of-band, the same way an operator
+	// would promote the first administrator.
+	authorID, authorToken := registerAndLogin(t, engine, authorUsername, testPass)
 	adminID, adminToken := registerAndLogin(t, engine, adminUsername, testPass)
+	if err := ctxExt.DB.Model(&domainaccount.User{}).Where("id = ?", adminID).
+		Update("role", domainaccount.RoleAdmin).Error; err != nil {
+		t.Fatalf("failed to promote admin user: %v", err)
+	}
 
 	t.Logf("Author ID: %d, Admin ID: %d", authorID, adminID)
+
+	// =========================================================================
+	// Case 0: A regular authenticated user must not reach moderation endpoints
+	// =========================================================================
+	t.Run("NonAdmin_ForbiddenFromAdminEndpoints", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodGet, "/api/v1/admin/reviews?status=2", nil)
+		req.Header.Set("Authorization", "Bearer "+authorToken)
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, req)
+
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a regular user hitting admin API, got %d: %s", w.Code, w.Body.String())
+		}
+	})
 
 	// =========================================================================
 	// Case 1: Machine inspection auto-rejects high-risk content & removes from timeline
@@ -279,6 +301,7 @@ func TestM9_ModerationLifecycle_EndToEnd(t *testing.T) {
 	t.Run("AdminBanUser_SuspendsAccountAndAuditLog", func(t *testing.T) {
 		maliciousUsername := fmt.Sprintf("spammer_%s", suffix)
 		maliciousID, _ := registerAndLogin(t, engine, maliciousUsername, testPass)
+		spammerAccess, spammerRefresh := loginTokens(t, engine, maliciousUsername, testPass)
 
 		// Admin calls POST /api/v1/admin/users/:id/ban
 		bodyBytes, _ := json.Marshal(map[string]interface{}{
@@ -298,6 +321,38 @@ func TestM9_ModerationLifecycle_EndToEnd(t *testing.T) {
 		if banResp.Data.Status != "suspended" {
 			t.Fatalf("expected suspended status, got %s", banResp.Data.Status)
 		}
+		if !banResp.Data.TokenRevoked {
+			t.Fatalf("expected ban response to report token_revoked=true")
+		}
+
+		// The ban must cut off credentials that were issued before it: a token that is still
+		// cryptographically valid and not blacklisted must be rejected on the account level.
+		meReq, _ := http.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+		meReq.Header.Set("Authorization", "Bearer "+spammerAccess)
+		meW := httptest.NewRecorder()
+		engine.ServeHTTP(meW, meReq)
+		if meW.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 for a banned account's access token, got %d: %s", meW.Code, meW.Body.String())
+		}
+
+		// The refresh chain must be closed as well, otherwise the ban is renewable forever.
+		refreshW := httptest.NewRecorder()
+		engine.ServeHTTP(refreshW, newJSONRequest(http.MethodPost, "/api/v1/auth/refresh", map[string]string{
+			"refresh_token": spammerRefresh,
+		}, fmt.Sprintf("192.168.41.%d", time.Now().Nanosecond()%200+10)))
+		if refreshW.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 refreshing a banned account, got %d: %s", refreshW.Code, refreshW.Body.String())
+		}
+
+		// Re-authentication is refused outright.
+		reloginW := httptest.NewRecorder()
+		engine.ServeHTTP(reloginW, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{
+			Username: maliciousUsername,
+			Password: testPass,
+		}, fmt.Sprintf("192.168.42.%d", time.Now().Nanosecond()%200+10)))
+		if reloginW.Code != http.StatusForbidden {
+			t.Fatalf("expected 403 logging in a banned account, got %d: %s", reloginW.Code, reloginW.Body.String())
+		}
 
 		// Verify audit logs were created
 		logs, err := moderationSvc.ListAuditLogs(context.Background(), domainmoderation.TargetTypeUser, maliciousID, 10)
@@ -310,4 +365,26 @@ func TestM9_ModerationLifecycle_EndToEnd(t *testing.T) {
 	})
 
 	_ = jwtMgr
+}
+
+// loginTokens authenticates an existing account and returns both credential types, so ban
+// enforcement can be asserted against each one independently.
+func loginTokens(t *testing.T, engine *gin.Engine, username, password string) (string, string) {
+	t.Helper()
+	ip := fmt.Sprintf("192.168.43.%d", time.Now().Nanosecond()%200+10)
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, newJSONRequest(http.MethodPost, "/api/v1/auth/login", httpaccount.LoginRequest{
+		Username: username,
+		Password: password,
+	}, ip))
+	if w.Code != http.StatusOK {
+		t.Fatalf("failed to login user %s: code=%d, body=%s", username, w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Data httpaccount.LoginResponse `json:"data"`
+	}
+	parseJSONResponse(t, w, &resp)
+	return resp.Data.Tokens.AccessToken, resp.Data.Tokens.RefreshToken
 }

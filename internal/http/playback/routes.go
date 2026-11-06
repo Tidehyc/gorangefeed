@@ -16,7 +16,7 @@ func RegisterRoutes(
 	tokenStore domainaccount.TokenStore,
 	rdb *redis.Client,
 ) {
-	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted)
+	softAuth := middleware.SoftJWTAuth(jwtMgr, tokenStore)
 
 	playback := router.Group("/api/v1/playback")
 	playback.Use(softAuth)

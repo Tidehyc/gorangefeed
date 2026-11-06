@@ -92,6 +92,14 @@ func (m *mockTokenStore) IsAccessTokenBlacklisted(ctx context.Context, tokenID s
 	return false, nil
 }
 
+func (m *mockTokenStore) MarkUserBanned(ctx context.Context, userID int64, ttl time.Duration) error {
+	return nil
+}
+func (m *mockTokenStore) ClearUserBanned(ctx context.Context, userID int64) error { return nil }
+func (m *mockTokenStore) IsUserBanned(ctx context.Context, userID int64) (bool, error) {
+	return false, nil
+}
+
 func setupTestRouter(svc *mockService, hub *mockHub) (*gin.Engine, *jwt.TokenManager, string) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()

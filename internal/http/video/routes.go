@@ -16,7 +16,7 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 	{
 		// Authenticated operations: upload media, upload cover, publish video, take down video
 		authRequired := videoGroup.Group("")
-		authRequired.Use(middleware.JWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted))
+		authRequired.Use(middleware.JWTAuth(jwtMgr, tokenStore))
 		{
 			authRequired.POST("/upload", h.UploadVideo)
 			authRequired.POST("/cover", h.UploadCover)
@@ -25,12 +25,12 @@ func RegisterRoutes(r *gin.Engine, h *Handler, jwtMgr *jwt.TokenManager, tokenSt
 		}
 
 		// Public video detail with SoftJWTAuth (extracts viewer context if token is present)
-		videoGroup.GET("/:videoId", middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted), h.GetDetail)
+		videoGroup.GET("/:videoId", middleware.SoftJWTAuth(jwtMgr, tokenStore), h.GetDetail)
 	}
 
 	// Author public videos query with SoftJWTAuth
 	userGroup := v1.Group("/users")
 	{
-		userGroup.GET("/:userId/videos", middleware.SoftJWTAuth(jwtMgr, tokenStore.IsAccessTokenBlacklisted), h.ListAuthorVideos)
+		userGroup.GET("/:userId/videos", middleware.SoftJWTAuth(jwtMgr, tokenStore), h.ListAuthorVideos)
 	}
 }
