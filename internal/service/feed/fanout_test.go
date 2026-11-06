@@ -3,11 +3,14 @@ package feed
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	domainoutbox "github.com/Tidehyc/gorangefeed/internal/domain/outbox"
 	domainrelation "github.com/Tidehyc/gorangefeed/internal/domain/relation"
+	"github.com/Tidehyc/gorangefeed/internal/infra/rabbitmq"
 	"gorm.io/gorm"
 )
 
@@ -49,14 +52,15 @@ func (m *mockRelationRepoForFanout) GetStats(ctx context.Context, userID int64) 
 }
 
 type mockFollowingRepoForFanout struct {
-	mu            sync.Mutex
-	inboxPushes   []inboxPushCall
-	outboxPushes  []outboxPushCall
-	inboxZSets    map[int64][]int64
-	authorZSets   map[int64][]int64
-	inboxExists   map[int64]bool
-	dbVideos      []int64
-	prewarmCalls  []prewarmCall
+	mu           sync.Mutex
+	inboxPushes  []inboxPushCall
+	outboxPushes []outboxPushCall
+	inboxZSets   map[int64][]int64
+	authorZSets  map[int64][]int64
+	inboxExists  map[int64]bool
+	dbVideos     []int64
+	prewarmCalls []prewarmCall
+	pushInboxErr error
 }
 
 type inboxPushCall struct {
@@ -77,6 +81,9 @@ type prewarmCall struct {
 func (m *mockFollowingRepoForFanout) PushToInboxes(ctx context.Context, followerIDs []int64, videoID int64, maxCapacity int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.pushInboxErr != nil {
+		return m.pushInboxErr
+	}
 	m.inboxPushes = append(m.inboxPushes, inboxPushCall{followerIDs: followerIDs, videoID: videoID})
 	return nil
 }
@@ -145,6 +152,10 @@ func (m *mockDeduplicatorForFanout) IsConsumed(ctx context.Context, eventID stri
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.consumedMap[eventID], nil
+}
+
+func (m *mockDeduplicatorForFanout) PurgeConsumedBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	return 0, nil
 }
 
 func TestFanoutService_NormalAuthor_PushToInboxes(t *testing.T) {
@@ -263,5 +274,73 @@ func TestFanoutService_DuplicateEvent_Skipped(t *testing.T) {
 	// No push calls should have occurred
 	if len(followingRepo.inboxPushes) != 0 || len(followingRepo.outboxPushes) != 0 {
 		t.Errorf("expected no fanout pushes on duplicate event")
+	}
+}
+
+// A fanout failure must not be recorded as consumed. Marking first is what turned a transient
+// Redis error into a silently dropped publish: the redelivery saw the marker and skipped the work.
+func TestFanoutService_FanoutFailure_DoesNotMarkConsumed(t *testing.T) {
+	authorID := int64(1001)
+	relationRepo := &mockRelationRepoForFanout{
+		statsMap: map[int64]*domainrelation.RelationStats{
+			authorID: {UserID: authorID, FollowerCount: 2},
+		},
+		followersMap: map[int64][]int64{
+			authorID: {2001, 2002},
+		},
+	}
+	followingRepo := &mockFollowingRepoForFanout{pushInboxErr: errors.New("redis is unreachable")}
+	dedup := &mockDeduplicatorForFanout{}
+
+	fanoutSvc, err := NewFanoutService(relationRepo, followingRepo, dedup)
+	if err != nil {
+		t.Fatalf("NewFanoutService failed: %v", err)
+	}
+
+	payload, _ := json.Marshal(VideoPublishedPayload{VideoID: 4242, AuthorID: authorID})
+	const eventID = "evt-publish-fail-1"
+	ctx := context.Background()
+
+	if err := fanoutSvc.HandleVideoPublished(ctx, eventID, payload); err == nil {
+		t.Fatalf("expected HandleVideoPublished to report the fanout failure")
+	}
+	if consumed, _ := dedup.IsConsumed(ctx, eventID); consumed {
+		t.Fatalf("event %s was marked consumed even though the fanout failed", eventID)
+	}
+
+	// Redelivery once the store recovers actually delivers the video.
+	followingRepo.mu.Lock()
+	followingRepo.pushInboxErr = nil
+	followingRepo.mu.Unlock()
+
+	if err := fanoutSvc.HandleVideoPublished(ctx, eventID, payload); err != nil {
+		t.Fatalf("redelivery failed: %v", err)
+	}
+	if len(followingRepo.inboxPushes) != 1 {
+		t.Fatalf("expected the redelivery to fan out once, got %d calls", len(followingRepo.inboxPushes))
+	}
+	if consumed, _ := dedup.IsConsumed(ctx, eventID); !consumed {
+		t.Fatalf("expected the event to be marked consumed after a successful fanout")
+	}
+}
+
+// A payload that cannot be parsed will never parse on redelivery either, so it must be reported as
+// permanent instead of burning the retry budget.
+func TestFanoutService_MalformedPayload_IsPermanent(t *testing.T) {
+	fanoutSvc, err := NewFanoutService(
+		&mockRelationRepoForFanout{},
+		&mockFollowingRepoForFanout{},
+		&mockDeduplicatorForFanout{},
+	)
+	if err != nil {
+		t.Fatalf("NewFanoutService failed: %v", err)
+	}
+
+	err = fanoutSvc.HandleVideoPublished(context.Background(), "evt-bad-payload", []byte(`{"video_id":`))
+	if err == nil {
+		t.Fatalf("expected an error for a malformed payload")
+	}
+	if !rabbitmq.IsPermanent(err) {
+		t.Fatalf("expected a permanent error for a malformed payload, got %v", err)
 	}
 }

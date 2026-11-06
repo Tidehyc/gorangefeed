@@ -16,6 +16,7 @@ type mockNotificationRepo struct {
 	unreadCount int64
 	markedIDs   []int64
 	allMarked   bool
+	createErr   error
 }
 
 func newMockRepo() *mockNotificationRepo {
@@ -26,6 +27,9 @@ func newMockRepo() *mockNotificationRepo {
 }
 
 func (m *mockNotificationRepo) Create(ctx context.Context, n *domainnotification.Notification) error {
+	if m.createErr != nil {
+		return m.createErr
+	}
 	if n.ID == 0 {
 		n.ID = int64(len(m.items) + 1)
 	}

@@ -109,6 +109,10 @@ type FollowingFeedRepository interface {
 type HotTimelineStore interface {
 	// IncrScore increments or decrements the engagement score of a video in the target minute bucket.
 	IncrScore(ctx context.Context, videoID int64, delta float64, occurredAt time.Time) error
+	// ApplyEngagementOnce applies delta to the target minute bucket at most once per eventID and
+	// reports whether this call was the one that applied it. It exists because ZINCRBY is not
+	// idempotent: a redelivered event must not score the same like twice.
+	ApplyEngagementOnce(ctx context.Context, eventID string, videoID int64, delta float64, occurredAt time.Time) (bool, error)
 	// MergeWindow aggregates sliding minute buckets into a stable snapshot and purges non-positive scores.
 	MergeWindow(ctx context.Context, asOf time.Time, windowMinutes int) (string, error)
 	// ListBySnapshot retrieves video IDs from the specified asOf snapshot using offset and limit.

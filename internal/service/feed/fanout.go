@@ -59,17 +59,23 @@ func NewFanoutService(
 
 // HandleVideoPublished processes the video.published event, writing to followers' inboxes (push)
 // or the author's outbox (pull) depending on whether the author has >= 5000 followers.
+//
+// The fanout runs before the event is recorded as consumed. Marking first meant that a fanout
+// failure left the marker behind, and the redelivery then short-circuited on it and dropped the
+// event for every follower. Fanout is a ZAdd per inbox, which is idempotent, so a redelivery after
+// a partial failure simply rewrites the same members instead of losing them.
 func (s *FanoutService) HandleVideoPublished(ctx context.Context, eventID string, payload []byte) error {
 	if eventID == "" {
 		return errors.New("event ID cannot be empty")
 	}
 
-	// 1. Transactional deduplication via consumed_events
-	isNew, err := s.deduplicator.MarkConsumed(ctx, eventID)
+	// 1. Cheap skip for replays that already completed. This only avoids redundant ZAdd calls;
+	// correctness comes from the idempotent fanout plus the mark at the end.
+	consumed, err := s.deduplicator.IsConsumed(ctx, eventID)
 	if err != nil {
 		return fmt.Errorf("deduplication check failed: %w", err)
 	}
-	if !isNew {
+	if consumed {
 		// Event was already consumed previously -> idempotent success
 		return nil
 	}
@@ -77,10 +83,10 @@ func (s *FanoutService) HandleVideoPublished(ctx context.Context, eventID string
 	// 2. Parse event payload
 	var p VideoPublishedPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("failed to unmarshal video published payload: %w", err)
+		return rabbitmq.Permanent(fmt.Errorf("failed to unmarshal video published payload: %w", err))
 	}
 	if p.VideoID <= 0 || p.AuthorID <= 0 {
-		return fmt.Errorf("invalid video published payload: video_id=%d, author_id=%d", p.VideoID, p.AuthorID)
+		return rabbitmq.Permanent(fmt.Errorf("invalid video published payload: video_id=%d, author_id=%d", p.VideoID, p.AuthorID))
 	}
 
 	// 3. Query author follower count to decide push vs pull
@@ -100,7 +106,7 @@ func (s *FanoutService) HandleVideoPublished(ctx context.Context, eventID string
 		if err := s.followingRepo.PushToAuthorOutbox(ctx, p.AuthorID, p.VideoID, MaxInboxCapacity); err != nil {
 			return fmt.Errorf("failed to push to author outbox for big V %d: %w", p.AuthorID, err)
 		}
-		return nil
+		return s.markConsumed(ctx, eventID)
 	}
 
 	// Normal Author -> write fanout to all followers' inbox ZSets
@@ -123,5 +129,14 @@ func (s *FanoutService) HandleVideoPublished(ctx context.Context, eventID string
 		cursor = nextCursor
 	}
 
+	return s.markConsumed(ctx, eventID)
+}
+
+// markConsumed records the event after the fanout landed. A failure here is retryable: the
+// redelivery repeats an idempotent fanout and tries to mark again.
+func (s *FanoutService) markConsumed(ctx context.Context, eventID string) error {
+	if _, err := s.deduplicator.MarkConsumed(ctx, eventID); err != nil {
+		return fmt.Errorf("failed to mark event %s as consumed: %w", eventID, err)
+	}
 	return nil
 }

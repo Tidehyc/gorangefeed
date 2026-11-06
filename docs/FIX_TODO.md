@@ -21,14 +21,14 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 | FIX-01 ✅ | P0 | 管理接口无 RBAC，任何登录用户可下架/封禁 | `internal/http/admin/routes.go` | M |
 | FIX-02 ✅ | P0 | 封禁不生效：token 不失效、refresh 可续命 | `service/moderation`、`service/account`、`middleware/auth.go` | M |
 | FIX-03 ✅ | P1 | 审核通过后时间线 score 用错量纲（videoID 当 publish_seq） | `service/moderation/service.go:144` | S |
-| FIX-04 | P1 | 消费端先标记后处理，失败即静默丢事件 | `feed/fanout.go:68`、`feed/hot_score_consumer.go:56`、`notification/consumer.go:81` | M |
+| FIX-04 ✅ | P1 | 消费端先标记后处理，失败即静默丢事件 | `feed/fanout.go:68`、`feed/hot_score_consumer.go:56`、`notification/consumer.go:81` | M |
 | FIX-05 ✅ | P1 | 推荐流翻页重复（page 不参与召回） | `service/feed/service.go:824-961` | S |
 | FIX-06 ✅ | P2 | UID 维度限流写好了但没接线 | `middleware/ratelimit.go:113` | S |
 | FIX-07 ✅ | P2 | 文档与实现漂移 | `README.md`、`docs/*.md`、`scripts/README.md` | S |
 | FIX-08 ✅ | P2 | E2E 断言缺口（M9-05 声称的验证点没测） | `test/e2e/moderation_lifecycle_test.go` | S |
 
-进度：**FIX-01 / FIX-02 / FIX-03 / FIX-05 / FIX-06 / FIX-07 / FIX-08 已完成并有测试覆盖**（见文末「已完成项实录」）。
-只剩 FIX-04（消费端 ack 语义），改动最大，单独一个 PR 收尾。
+进度：**FIX-01 ~ FIX-08 全部完成并有测试覆盖**（见文末「已完成项实录」）。
+FIX-04 是最后一个，单独一个 PR 收尾（消费端 ack 语义，改动面最大）。
 
 
 ---
@@ -149,7 +149,7 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 
 **影响**：业务处理返回 error → 上层 Nack 重投 → 第二次进来 `isNew=false` → 直接 ACK。事件永久丢失：点赞数不加、热度不涨、通知不发。当前能兜住一部分是因为 `notifications` 表有 `UNIQUE(recipient_id, event_id)`，但那条路径的重试根本不会发生。
 
-**修复要点**
+**修复要点（初版方案，实际落地时的偏差见文末「FIX-04 实录」）**
 
 1. 能进 MySQL 事务的业务（写通知、写计数落库）改为 `ExecuteWithDeduplication`：`MarkConsumed` 与业务写入同事务提交，失败一起回滚。
 2. 无法进事务的副作用（Redis `ZINCRBY` 时间线/热榜、SSE 广播）分两类处理：
@@ -160,8 +160,10 @@ cd /home/tide/GoProjects/GOrangeFeed && go build ./... && go vet ./... && go tes
 
 **验收**
 
-- 新增 `TestFanout_ProcessingFailure_DoesNotMarkConsumed` 类用例（三处消费者各一条）。
-- 手工验证：临时让通知写库抛错，观察日志里同一 `event_id` 至少重投 3 次且最终进 dead 队列，而不是一次就 ACK。
+- 新增「业务失败不标记」用例（三处消费者各一条）：`TestFanoutService_FanoutFailure_DoesNotMarkConsumed`、
+  `TestConsumer_ProcessingFailure_DoesNotMarkConsumed`、`TestHotScoreConsumer_ApplyFailure_DoesNotMarkConsumed`。
+- 手工验证：临时让通知写库抛错，观察日志里同一 `event_id` 最多重投 5 次且最终进 `<queue>.dead`，而不是一次就 ACK。
+  这一条**没有做**（需要停 MySQL 并盯 worker 日志的运维演练），改用单测覆盖判定表 + 失败不标记的不变量，见实录。
 
 ---
 
@@ -249,7 +251,7 @@ nextCursor = domainfeed.EncodeRecommendCursor(page+1, seed)     // 961  ← page
 3. ✅ **FIX-05 + FIX-08 的翻页断言**一起。
 4. ✅ **FIX-06**（限流接线）。
 5. ✅ **FIX-07**（纯文档）。
-6. ⬜ **FIX-04**（触及三处消费者的 ack 语义，改动风险最高，单独一个 PR，跑全量 `./internal/...` + E2E 回归）。
+6. ✅ **FIX-04**（触及三处消费者的 ack 语义，改动风险最高，单独一个 PR，跑全量 `./internal/...` + E2E 回归）。
 
 每个 PR 的验证口径统一为：`go build ./...` + `go vet ./...` + `go test -p 1 -count=1 ./internal/...` + 对应 E2E 用例；文档类改动只跑 `markdown` 检查即可。
 
@@ -402,3 +404,79 @@ score 直接落成自增主键。用例里的视频是**绕过发布流程**直�
 
 **反证**：把 `s.appendApprovedToTimeline(ctx, videoID)` 改回 `_ = s.timelineRepo.Append(ctx, videoID)` 重跑，
 用例立刻报 `expected approval to assign a publish_seq, got 0`，随后还原。
+
+### FIX-04 · 消费端 ack 语义
+
+**根因**：三处消费者都是「先 `MarkConsumed` 再干活」。业务一旦失败，`consumed_events` 里
+已经有这个 eventID，重投进来第一步就 `isNew=false` 直接返回 nil → ACK，事件永久丢失：
+点赞数不加、热度不涨、通知不发。**标记必须是最后一个动作，而不是第一个。**
+
+**做法**：三个消费者各自按副作用的幂等性选路，但共性只有一句 —— **先干活，干成了再标记**。
+
+| 消费者 | 副作用 | 幂等保证 | 顺序 |
+|---|---|---|---|
+| `feed/fanout.go` | 粉丝 inbox / 作者 outbox 的 `ZAdd` | 天然幂等（同 member 重复写等价） | `IsConsumed` 快判 → 扇出 → `MarkConsumed` |
+| `notification/consumer.go` | `notifications` 插入 | `UNIQUE(recipient_id, event_id)` + `ON CONFLICT DO NOTHING` | `IsConsumed` 快判 → 落库 → `MarkConsumed` |
+| `feed/hot_score_consumer.go` | 热榜 `ZINCRBY` | **非幂等**，需要事件级守卫 | `ApplyEngagementOnce`（守卫+加分原子化）→ `MarkConsumed` |
+
+**与初版方案的三处偏差（以及为什么）**
+
+1. **通知没有走 `ExecuteWithDeduplication`**。那条路要业务写入与 `consumed_events` 同事务，
+   而 `domainnotification.Repository.Create(ctx, n)` 的签名里没有事务句柄 —— 领域接口是刻意不暴露
+   `*gorm.DB` 的。硬塞一个 `CreateTx(ctx, tx *gorm.DB, ...)` 会把 gorm 泄进领域层，为了一条
+   「插入 + 标记」的原子性付出架构代价。而通知插入本来就已经幂等（唯一键 + `DO NOTHING`），
+   重投一次的结果与事务版完全一致，所以选了「先落库、再标记」。
+   ⇒ `ExecuteWithDeduplication` 目前仍是**生产代码零调用**的既有死代码，本轮不动它（改动面已经很大），
+   留作后续清理。
+2. **热榜守卫必须原子化，不能 `SETNX` 完再 `ZINCRBY`**。两步写法有个新的丢事件窗口：`SETNX` 成功、
+   紧接着 `ZINCRBY` 失败（连接断开 / OOM），守卫已经落下，重投进来跳过加分 —— 与原来的 bug 一模一样，
+   只是丢的层次从「标记」挪到了「守卫」。改成一段 Lua 把 `SET NX EX` 与 `ZINCRBY` 一次执行：
+   要么都成，要么都不生效。守卫键 `feed:hot:applied:{event_id}`，TTL 7 天（与 `consumed_events` 的保留期一致）。
+3. **必须给重投加预算 + 死信队列**。原来是 `d.Nack(false, true)` 无限重投：修好顺序之后，一条永远
+   失败的毒消息会变成无限循环（以前是「一次就丢」，现在是「永远重试」，都不对）。所以给
+   `infra/rabbitmq.Consumer` 加了 `AttemptTracker`（默认 5 次预算）与 `<queue>.dead`：
+   超预算 → 转投死信队列并 ACK，不再阻塞后面的消息。同时引入 `rabbitmq.Permanent(err)`：
+   反序列化失败、`video_id <= 0` 这类「重投一万次也一样」的错误直接进死信，不浪费预算。
+
+**顺带修掉的两个行为**
+
+- 畸形 payload 过去返回 `nil`（悄悄 ACK 掉）。现在返回 `Permanent`，进死信队列可回捞 ——
+  静默丢弃数据本身就是这条 bug 的同款，只是不经过 `consumed_events`。
+- `consumed_events` 从来没有清理。新增 `PurgeConsumedBefore(ctx, cutoff)` 与
+  `migrations/000014_add_consumed_events_retention_index.up.sql`（`idx_consumed_at`，
+  避免清理变成全表扫），worker 启动时 + 每小时删 7 天前的行。保留期取自「broker 可能重投多久」，
+  不是「业务想留多久」。
+
+**测试**
+
+- 三条「失败不标记」用例，每条都断言三件事：返回 error、`IsConsumed == false`、恢复后重投能补齐副作用。
+- `consumer_internal_test.go`：`shouldRequeue` 判定表（第 5 次到预算即死信、`permanent` 永不重试）、
+  `Permanent` 穿透 `fmt.Errorf("%w")` 包装、`attemptKey` 在有/无 `MessageId` 时都跨重投稳定、
+  计数器过期后从 1 重新计数且被周期清扫。
+- `TestHotScoreConsumer_ValidationAndEdgeCases` 里「`video_id=0` 返回 nil」的期望值改为
+  `IsPermanent(err) == true`：这是**有意的语义变化**（静默 ACK → 进死信），不是为了把测试改绿。
+
+**反证**（四条，逐条改回去验证用例会红，随后全部还原）
+
+| 改回什么 | 哪条用例红 | 报错 |
+|---|---|---|
+| fanout 的 `IsConsumed` 换回 `MarkConsumed` | `TestFanoutService_FanoutFailure_DoesNotMarkConsumed` | `event evt-publish-fail-1 was marked consumed even though the fanout failed` |
+| notification 的 `IsConsumed` 换回 `MarkConsumed` | `TestConsumer_ProcessingFailure_DoesNotMarkConsumed` | `event ev_persist_fail_1 was marked consumed even though nothing was persisted` |
+| 热榜把 `markConsumed` 提到 `ApplyEngagementOnce` 之前 | `TestHotScoreConsumer_ApplyFailure_DoesNotMarkConsumed` | `event ev_apply_fail_1 was marked consumed even though the score was never applied` |
+| `shouldRequeue` 的 `<` 放宽成 `<=` | `TestConsumer_ShouldRequeue/attempt_at_the_budget_is_dead-lettered` | `shouldRequeue(attempts=5, permanent=false) = true, want false` |
+
+**验证**
+
+- `go build ./...`、`go vet ./...` 通过；
+- `go test -p 1 -count=1 ./internal/...` → 58 个包全 ok；
+- `make e2e` → `ok github.com/Tidehyc/gorangefeed/test/e2e 74.458s`。
+
+**遗留取舍**
+
+1. **未做真实 broker 故障演练**：死信队列的落盘行为只有单测层的判定表覆盖，没有「停掉 MySQL → 观察
+   worker 重试 5 次 → 消息出现在 `<queue>.dead`」的实测记录。要补这一条得停依赖、盯日志，属于运维演练。
+2. **`consumed_events` 与热榜守卫各自 7 天**：两边保留期一致，但它们是两套独立状态。Redis 丢数据时
+   热榜守卫消失，此时若同一条消息又被重投（超过 7 天基本不会发生），分数会重复累加一次。
+   分数是可再生的近似值，接受这个偏差，不为此引入跨存储事务。
+3. **`ExecuteWithDeduplication` 仍是死代码**（见偏差 1）。它把 `*gorm.DB` 写进了 dedup 契约里，
+   长期看应该删掉，但删除会波及 2 个 mock 与 1 条针对实现本身的单测，与本轮的 ack 语义修复不是一件事。

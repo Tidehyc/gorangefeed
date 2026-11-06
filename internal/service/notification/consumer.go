@@ -72,38 +72,56 @@ func NewConsumer(
 }
 
 // HandleEvent dispatches an incoming RabbitMQ event by routing key with deduplication.
+//
+// The notification rows are written before the event is recorded as consumed. Marking first meant a
+// persistence failure left the marker behind, so the redelivery skipped the work and the recipient
+// never saw the notification. The insert itself is idempotent (UNIQUE(recipient_id, event_id) with
+// ON CONFLICT DO NOTHING), so repeating it on redelivery is safe.
 func (c *Consumer) HandleEvent(ctx context.Context, eventID string, routingKey string, payload []byte) error {
 	if eventID == "" {
 		return errors.New("event ID cannot be empty")
 	}
 
-	// 1. Transactional deduplication via consumed_events
-	isNew, err := c.deduplicator.MarkConsumed(ctx, eventID)
+	// 1. Cheap skip for replays that already completed.
+	consumed, err := c.deduplicator.IsConsumed(ctx, eventID)
 	if err != nil {
 		return fmt.Errorf("deduplication check failed: %w", err)
 	}
-	if !isNew {
+	if consumed {
 		// Event was already consumed previously -> idempotent skip
 		return nil
 	}
 
+	// 2. Run the business handler
 	switch routingKey {
 	case rabbitmq.RoutingKeyInteractionLiked:
-		return c.handleLike(ctx, eventID, payload)
+		if err := c.handleLike(ctx, eventID, payload); err != nil {
+			return err
+		}
 	case rabbitmq.RoutingKeyInteractionCommented:
-		return c.handleComment(ctx, eventID, payload)
+		if err := c.handleComment(ctx, eventID, payload); err != nil {
+			return err
+		}
 	case rabbitmq.RoutingKeyRelationFollowed:
-		return c.handleFollow(ctx, eventID, payload)
+		if err := c.handleFollow(ctx, eventID, payload); err != nil {
+			return err
+		}
 	default:
-		// Unrecognized routing key, safely skip
-		return nil
+		// Unrecognized routing key: nothing to persist, but still record it so the broker
+		// stops redelivering.
 	}
+
+	// 3. Record consumption only now that the notifications are persisted
+	if _, err := c.deduplicator.MarkConsumed(ctx, eventID); err != nil {
+		return fmt.Errorf("failed to mark event %s as consumed: %w", eventID, err)
+	}
+	return nil
 }
 
 func (c *Consumer) handleLike(ctx context.Context, eventID string, payload []byte) error {
 	var p LikeEventPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("failed to unmarshal like payload: %w", err)
+		return rabbitmq.Permanent(fmt.Errorf("failed to unmarshal like payload: %w", err))
 	}
 
 	// Self-action defense: liking own video never notifies oneself
@@ -139,7 +157,7 @@ func (c *Consumer) handleLike(ctx context.Context, eventID string, payload []byt
 func (c *Consumer) handleComment(ctx context.Context, eventID string, payload []byte) error {
 	var p CommentEventPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("failed to unmarshal comment payload: %w", err)
+		return rabbitmq.Permanent(fmt.Errorf("failed to unmarshal comment payload: %w", err))
 	}
 
 	occurredAt := p.CommentedAt
@@ -210,7 +228,7 @@ func (c *Consumer) handleComment(ctx context.Context, eventID string, payload []
 func (c *Consumer) handleFollow(ctx context.Context, eventID string, payload []byte) error {
 	var p FollowEventPayload
 	if err := json.Unmarshal(payload, &p); err != nil {
-		return fmt.Errorf("failed to unmarshal follow payload: %w", err)
+		return rabbitmq.Permanent(fmt.Errorf("failed to unmarshal follow payload: %w", err))
 	}
 
 	// Self-action defense: following oneself should never happen, but filter defensively
